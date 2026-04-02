@@ -107,10 +107,11 @@ commit_sha: abc123f
 ---
 ```
 
-## Building
+## Installation
 
 ```bash
-go build -o github-export .
+go build .
+sudo install -m 755 github-export /usr/local/bin/
 ```
 
 Requires Go 1.22+.
