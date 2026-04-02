@@ -108,6 +108,7 @@ func detectEvents(path string, issue map[string]any, isPR bool, pr map[string]an
 	if prev == nil {
 		// File doesn't exist — new issue or PR
 		ev := base
+		ev.Body = jsonutil.Str(issue, "body")
 		if isPR {
 			ev.Type = hooks.PRCreated
 		} else {
@@ -171,6 +172,7 @@ func detectCommentEvents(path string, issue map[string]any, isPR bool, timeline 
 				Labels: jsonutil.LabelNames(issue, "labels"),
 				File:   path,
 				Repo:   repoSlug,
+				Body:   jsonutil.Str(ev, "body"),
 			})
 		}
 	}

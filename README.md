@@ -22,6 +22,7 @@ The output directory defaults to `github-data/`. On the first run, all data is f
 | Issues + PRs      | `github-data/issues/0042.md`    | Incremental         |
 | Releases          | `github-data/releases/v1.0.0.md`| Always full sync   |
 | Repo metadata     | `github-data/repo.yml`          | Updated each run    |
+| Events            | `github-data/events/*.md`       | Since last sync     |
 
 ### Issues and pull requests
 
@@ -36,6 +37,34 @@ On second run, the program reads `synced_at` from `repo.yml` and passes it as `?
 ### Rate limiting
 
 Automatically sleeps when `X-RateLimit-Remaining` drops below 100, resuming when the reset window passes. A typical incremental sync of 50 updated issues costs ~200 API requests, well within the 5,000/hour limit.
+
+### Events
+
+Each sync detects changes — new issues, closed PRs, new comments, etc. — and exports them as individual markdown files in `github-data/events/`. These files are designed as a handoff point: an agent reads them, acts on them, and deletes them. No configuration is needed; events are always exported when detected.
+
+Event types: `issue_created`, `issue_closed`, `issue_reopened`, `pr_created`, `pr_merged`, `pr_closed`, `comment_created`.
+
+Example event file (`events/20240916-140000-000-issue_created-42.md`):
+
+```markdown
+---
+event: issue_created
+number: 42
+title: Fix crash on empty input
+author: octocat
+state: open
+labels:
+  - bug
+file: github-data/issues/0042.md
+repo: owner/repo
+url: https://github.com/owner/repo/issues/42
+exported_at: 2024-09-16T14:00:00Z
+---
+
+See [0042.md](github-data/issues/0042.md) for full details.
+```
+
+Event detection adds no extra API calls — it compares the data already fetched during sync against the previous on-disk state.
 
 ## Output format
 

@@ -41,7 +41,7 @@ func main() {
 		repo = parts[1]
 	}
 
-	if len(os.Args) >= 3 && os.Args[2] != "--dry-run" {
+	if len(os.Args) >= 3 {
 		outDir = os.Args[2]
 	} else {
 		outDir = "github-data"
@@ -89,20 +89,6 @@ func main() {
 		defaultBranch = jsonutil.Str(repoData, "default_branch")
 	}
 
-	// Load hooks from hooks/ directory
-	dryRun := false
-	for _, a := range os.Args[1:] {
-		if a == "--dry-run" {
-			dryRun = true
-			break
-		}
-	}
-	hooksDir := filepath.Join(outDir, "hooks")
-	hooksList, err := hooks.LoadHooks(hooksDir)
-	if err != nil {
-		log.Fatalf("Loading hooks: %v", err)
-	}
-
 	// Sync all entities
 	if err := sync.Labels(client, owner, repo, outDir); err != nil {
 		log.Printf("Warning: %v", err)
@@ -131,9 +117,12 @@ func main() {
 
 	log.Printf("Done. synced_at=%s", newCfg.SyncedAt)
 
-	// Run hooks
+	// Export events as markdown files for agents to pick up
 	if len(events) > 0 {
-		log.Printf("Running hooks for %d events...", len(events))
-		hooks.Run(hooksList, events, dryRun)
+		eventsDir := filepath.Join(outDir, "events")
+		log.Printf("Exporting %d events to %s", len(events), eventsDir)
+		if err := hooks.Export(eventsDir, events); err != nil {
+			log.Printf("Warning: exporting events: %v", err)
+		}
 	}
 }

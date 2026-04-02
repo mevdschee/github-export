@@ -1,13 +1,13 @@
 package hooks
 
 import (
-	"bufio"
 	"fmt"
-	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github-export/internal/document"
 )
 
 const (
@@ -27,153 +27,62 @@ type Event struct {
 	Author string
 	State  string
 	Labels []string
-	File   string // absolute path to the issue/PR markdown file
+	File   string // relative path to the issue/PR markdown file (e.g. "github-data/issues/0042.md")
 	Repo   string // "owner/repo"
+	Body   string // event-specific content: issue body for created, comment text for comments, empty for state changes
 }
 
-// Hook is a parsed markdown template file from the hooks/ directory.
-type Hook struct {
-	Event    string // event type from frontmatter
-	Template string // markdown body with {{issue.*}} placeholders
-	Path     string // source file path (for logging)
+// Export writes each event as a markdown file in the events/ directory.
+// Files are named with a timestamp and event type so agents can pick them up
+// and remove them after handling.
+func Export(eventsDir string, events []Event) error {
+	if len(events) == 0 {
+		return nil
+	}
+
+	if err := os.MkdirAll(eventsDir, 0755); err != nil {
+		return fmt.Errorf("creating events directory: %w", err)
+	}
+
+	now := time.Now().UTC()
+	for i, ev := range events {
+		d := &document.Writer{}
+		d.KV("event", ev.Type)
+		d.KV("number", ev.Number)
+		d.KV("title", ev.Title)
+		d.KV("author", ev.Author)
+		d.KV("state", ev.State)
+		d.List("labels", ev.Labels)
+		d.KV("file", ev.File)
+		d.KV("repo", ev.Repo)
+		d.KV("url", fmt.Sprintf("https://github.com/%s/issues/%d", ev.Repo, ev.Number))
+		d.KV("exported_at", now.Format(time.RFC3339))
+
+		// Timestamp with sub-second index to guarantee unique filenames
+		name := fmt.Sprintf("%s-%03d-%s-%d.md",
+			now.Format("20060102-150405"), i, ev.Type, ev.Number)
+		path := filepath.Join(eventsDir, name)
+
+		body := ev.Body
+
+		content := formatEventFile(d.String(), body)
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			return fmt.Errorf("writing event %s: %w", name, err)
+		}
+	}
+
+	return nil
 }
 
-// LoadHooks reads all .md files from the hooks directory.
-// Each file has YAML frontmatter with an "event" field and a markdown body
-// containing {{issue.number}}, {{issue.title}}, etc. placeholders.
-// Returns an empty slice if the directory doesn't exist.
-func LoadHooks(dir string) ([]Hook, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
+func formatEventFile(frontmatter, body string) string {
+	var b strings.Builder
+	b.WriteString("---\n")
+	b.WriteString(frontmatter)
+	b.WriteString("---\n")
+	if body != "" {
+		b.WriteString("\n")
+		b.WriteString(body)
+		b.WriteString("\n")
 	}
-
-	var hooks []Hook
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		path := filepath.Join(dir, e.Name())
-		hook, err := parseHookFile(path)
-		if err != nil {
-			log.Printf("Warning: skipping %s: %v", path, err)
-			continue
-		}
-		hooks = append(hooks, hook)
-	}
-	return hooks, nil
-}
-
-// parseHookFile reads a markdown file with YAML frontmatter.
-// Expects:
-//
-//	---
-//	event: issue_created
-//	---
-//	<template body>
-func parseHookFile(path string) (Hook, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return Hook{}, err
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-
-	// Expect opening ---
-	if !scanner.Scan() || strings.TrimSpace(scanner.Text()) != "---" {
-		return Hook{}, fmt.Errorf("missing frontmatter")
-	}
-
-	// Read frontmatter lines
-	event := ""
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.TrimSpace(line) == "---" {
-			break
-		}
-		if strings.HasPrefix(line, "event:") {
-			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-		}
-	}
-	if event == "" {
-		return Hook{}, fmt.Errorf("missing event field in frontmatter")
-	}
-
-	// Read body
-	var body strings.Builder
-	for scanner.Scan() {
-		if body.Len() > 0 {
-			body.WriteByte('\n')
-		}
-		body.WriteString(scanner.Text())
-	}
-
-	return Hook{
-		Event:    event,
-		Template: strings.TrimSpace(body.String()),
-		Path:     path,
-	}, nil
-}
-
-// render replaces {{issue.*}} placeholders in the template with event values.
-func render(template string, ev Event) string {
-	absFile := ev.File
-	if abs, err := filepath.Abs(ev.File); err == nil {
-		absFile = abs
-	}
-
-	r := strings.NewReplacer(
-		"{{issue.number}}", fmt.Sprintf("%d", ev.Number),
-		"{{issue.title}}", ev.Title,
-		"{{issue.author}}", ev.Author,
-		"{{issue.state}}", ev.State,
-		"{{issue.labels}}", strings.Join(ev.Labels, ", "),
-		"{{issue.file}}", absFile,
-		"{{issue.repo}}", ev.Repo,
-		"{{issue.url}}", fmt.Sprintf("https://github.com/%s/issues/%d", ev.Repo, ev.Number),
-		"{{event.type}}", ev.Type,
-	)
-	return r.Replace(template)
-}
-
-// Run executes matching hooks for each event. Each hook's rendered markdown
-// body is passed to "claude -p" with the issue file attached via --file.
-func Run(hooks []Hook, events []Event, dryRun bool) {
-	if len(hooks) == 0 || len(events) == 0 {
-		return
-	}
-
-	for _, ev := range events {
-		for _, hook := range hooks {
-			if hook.Event != ev.Type {
-				continue
-			}
-
-			prompt := render(hook.Template, ev)
-
-			absFile := ev.File
-			if abs, err := filepath.Abs(ev.File); err == nil {
-				absFile = abs
-			}
-
-			if dryRun {
-				log.Printf("  [dry-run] %s #%d (%s):\n%s", ev.Type, ev.Number, filepath.Base(hook.Path), prompt)
-				continue
-			}
-
-			log.Printf("  hook %s #%d (%s)", ev.Type, ev.Number, filepath.Base(hook.Path))
-
-			cmd := exec.Command("claude", "-p", prompt, "--file", absFile)
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-
-			if err := cmd.Run(); err != nil {
-				log.Printf("  hook failed: %v", err)
-			}
-		}
-	}
+	return b.String()
 }
