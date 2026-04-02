@@ -29,7 +29,11 @@ func main() {
 
 	token := os.Getenv("GITHUB_TOKEN")
 	if token == "" {
-		log.Fatal("GITHUB_TOKEN environment variable is required (try: export GITHUB_TOKEN=$(gh auth token))")
+		fmt.Fprintln(os.Stderr, "GITHUB_TOKEN environment variable is required. Run:")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "  export GITHUB_TOKEN=$(gh auth token)")
+		fmt.Fprintln(os.Stderr, "")
+		os.Exit(1)
 	}
 
 	var owner, repo, outDir string

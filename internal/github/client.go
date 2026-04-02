@@ -30,6 +30,16 @@ func NewClient(token string) *Client {
 
 var linkNextRe = regexp.MustCompile(`<([^>]+)>;\s*rel="next"`)
 
+func apiError(url string, status int, body []byte) error {
+	msg := fmt.Sprintf("GET %s: %d %s", url, status, string(body))
+	if status == 401 || status == 403 {
+		msg += "\n\nYour token may be expired or lack the required scopes. Run:\n\n  export GITHUB_TOKEN=$(gh auth token)"
+	} else if status == 404 {
+		msg += "\n\nRepository not found. Check the owner/repo name and that your token has access."
+	}
+	return fmt.Errorf("%s", msg)
+}
+
 func (c *Client) do(url string, headers map[string]string) (*http.Response, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -73,7 +83,7 @@ func (c *Client) GetJSON(url string, headers map[string]string) (json.RawMessage
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GET %s: %d %s", url, resp.StatusCode, string(body))
+		return nil, apiError(url, resp.StatusCode, body)
 	}
 	data, err := io.ReadAll(resp.Body)
 	return json.RawMessage(data), err
@@ -89,7 +99,7 @@ func (c *Client) GetPaginated(url string, headers map[string]string) ([]json.Raw
 		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode != 200 {
-			return all, fmt.Errorf("GET %s: %d %s", url, resp.StatusCode, string(body))
+			return all, apiError(url, resp.StatusCode, body)
 		}
 		var items []json.RawMessage
 		if err := json.Unmarshal(body, &items); err != nil {
