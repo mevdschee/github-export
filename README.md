@@ -55,7 +55,7 @@ the reset window passes. A typical incremental sync of 50 updated issues costs
 
 ### Events
 
-Each sync detects changes — new issues, closed PRs, new comments, etc. — and
+Each sync detects changes (new issues, closed PRs, new comments, etc.) and
 exports them as individual markdown files in `github-data/events/`. These files
 are designed as a handoff point: an agent reads them, acts on them, and deletes
 them. No configuration is needed; events are always exported when detected.
