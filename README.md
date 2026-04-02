@@ -7,6 +7,8 @@ incrementally on subsequent invocations.
 Designed so an agent can read, grep, and reason about GitHub data without API
 access.
 
+Blog post: https://www.tqdev.com/2026-github-export-open-source-maintenance-ai/
+
 ## Usage
 
 ```bash
