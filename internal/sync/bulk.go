@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github-export/internal/github"
-	"github-export/internal/jsonutil"
+	"github.com/mevdschee/github-export/internal/github"
+	"github.com/mevdschee/github-export/internal/jsonutil"
 )
 
 // issueNumberFromURL extracts the issue/PR number from a GitHub API URL

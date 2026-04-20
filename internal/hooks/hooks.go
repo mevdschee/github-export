@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github-export/internal/document"
+	"github.com/mevdschee/github-export/internal/document"
 )
 
 const (

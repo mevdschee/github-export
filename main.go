@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github-export/internal/config"
-	"github-export/internal/github"
-	"github-export/internal/hooks"
-	"github-export/internal/jsonutil"
-	"github-export/internal/sync"
+	"github.com/mevdschee/github-export/internal/config"
+	"github.com/mevdschee/github-export/internal/github"
+	"github.com/mevdschee/github-export/internal/hooks"
+	"github.com/mevdschee/github-export/internal/jsonutil"
+	"github.com/mevdschee/github-export/internal/sync"
 )
 
 func main() {
