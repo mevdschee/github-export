@@ -18,6 +18,8 @@ github-data/
     0043.md
   projects/                  # Projects v2 boards linked to this repo
     0001.md                  # project file — one per open project
+  discussions/               # GitHub Discussions
+    0007.md                  # one file per discussion
   releases/
     v1.0.0.md
     v1.2.0.md
@@ -31,12 +33,31 @@ see the full thread.
 
 ## repo.yml
 
-Repository-level metadata and sync cursor.
+Repository-level metadata and sync cursor. Feature flags and `archived` are
+always written (even when `false`) so agents can grep for them; other fields
+are omitted when empty.
 
 ```yaml
 owner: acme
 repo: widgets
 default_branch: main
+description: A widget catalog
+homepage: https://widgets.example
+visibility: public
+language: Go
+license: MIT License
+topics:
+  - cli
+  - golang
+archived: false
+has_issues: true
+has_projects: true
+has_wiki: true
+has_pages: false
+has_discussions: false
+created_at: 2024-01-01T00:00:00Z
+updated_at: 2024-09-15T08:00:00Z
+pushed_at: 2024-09-17T07:55:00Z
 synced_at: 2024-09-17T08:00:00Z
 ```
 
@@ -289,6 +310,92 @@ fields:
   Status: Done
 ---
 ```
+
+## Discussion File
+
+One file per GitHub Discussion at `discussions/<number>.md`. Discussions share
+the repository's number space with issues and PRs (so a repo can have an issue
+#42 *or* a discussion #42, never both). YAML frontmatter holds the metadata;
+top-level replies are emitted as `document: comment` and nested replies as
+`document: reply` with a `parent_id` pointing at the comment they reply to.
+
+Discussions are GraphQL-only and use the same `since` cutoff as the rest of
+the exporter — the list is fetched newest-first and pagination stops as soon
+as items are older than the cutoff.
+
+```markdown
+---
+number: 7
+title: How do I export the wiki?
+type: discussion
+state: open
+created_at: 2024-09-15T10:30:00Z
+updated_at: 2024-09-16T14:00:00Z
+author: octocat
+category: Q&A
+labels:
+  - question
+answer_id: 17024104
+answer_chosen_at: 2024-09-16T14:00:00Z
+answer_chosen_by: hubot
+---
+
+Discussion body markdown.
+
+---
+document: comment
+id: 17024104
+author: hubot
+created_at: 2024-09-15T11:00:00Z
+is_answer: true
+---
+
+Top-level reply that was marked as the chosen answer.
+
+---
+document: reply
+id: 17024105
+parent_id: 17024104
+author: octocat
+created_at: 2024-09-15T11:30:00Z
+---
+
+Nested reply under the top-level comment.
+```
+
+### Discussion frontmatter
+
+| Field              | Type        | Notes                                                                |
+| ------------------ | ----------- | -------------------------------------------------------------------- |
+| `number`           | integer     | Required. Unique within the repo (shared with issues/PRs)            |
+| `title`            | string      | Required                                                             |
+| `type`             | string      | Always `discussion`                                                  |
+| `state`            | string      | `open` or `closed`                                                   |
+| `state_reason`     | string      | `outdated`, `duplicate`, `resolved`, `reopened` (lowercased)         |
+| `locked`           | boolean     | Omit if false                                                        |
+| `created_at`       | ISO-8601    | Required                                                             |
+| `updated_at`       | ISO-8601    | Required                                                             |
+| `closed_at`        | ISO-8601    | Present when closed                                                  |
+| `author`           | string      | GitHub username                                                      |
+| `category`         | string      | Discussion category name (e.g. `Q&A`, `General`, `Ideas`)            |
+| `labels`           | string list | Label names                                                          |
+| `answer_id`        | integer     | Q&A only: `databaseId` of the comment marked as answer               |
+| `answer_chosen_at` | ISO-8601    | Q&A only                                                             |
+| `answer_chosen_by` | string      | Q&A only: username who marked the answer                             |
+
+### Discussion sub-documents
+
+| `document`  | Fields                                                              |
+| ----------- | ------------------------------------------------------------------- |
+| `comment`   | `id`, `author`, `created_at`, optional `is_answer: true`            |
+| `reply`     | `id`, `parent_id`, `author`, `created_at`                           |
+
+If a discussion has more than 100 top-level comments, or any comment has more
+than 50 replies, the export keeps only the first N entries and logs a warning
+(`Warning: discussion #N has more than 100 top-level comments — only first 100
+exported`). This is a deliberate trade-off to keep GraphQL node cost bounded.
+
+## Cross-references
 
 When an issue or PR is on one or more projects, the issue file's frontmatter
 also lists them:

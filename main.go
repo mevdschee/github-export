@@ -126,6 +126,11 @@ func main() {
 	if err := sync.Releases(client, owner, repo, outDir); err != nil {
 		log.Printf("Warning: %v", err)
 	}
+	discussionEvents, err := sync.Discussions(client, owner, repo, outDir, since)
+	if err != nil {
+		log.Printf("Warning: %v", err)
+	}
+	events = append(events, discussionEvents...)
 	if err := sync.Repo(client, owner, repo, outDir, syncStart); err != nil {
 		log.Fatalf("Writing repo.yml: %v", err)
 	}

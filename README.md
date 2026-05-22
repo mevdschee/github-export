@@ -1,8 +1,8 @@
 # github-export
 
-Export all GitHub issues, pull requests, releases, labels, milestones, and
-Projects (v2) from a repository into a local `github-data/` folder as plain
-markdown files. Runs incrementally on subsequent invocations.
+Export all GitHub issues, pull requests, discussions, releases, labels,
+milestones, and Projects (v2) from a repository into a local `github-data/`
+folder as plain markdown files. Runs incrementally on subsequent invocations.
 
 Designed so an agent can read, grep, and reason about GitHub data without API
 access.
@@ -13,12 +13,23 @@ Blog post: https://www.tqdev.com/2026-github-export-open-source-maintenance-ai/
 
 ```bash
 export GITHUB_TOKEN=$(gh auth token)
-./github-export owner/repo [output-dir]
+./github-export [flags] owner/repo [output-dir]
 ```
 
 The output directory defaults to `github-data/`. On the first run, all data is
 fetched. On subsequent runs, only issues and PRs updated since the last sync are
 re-fetched.
+
+### Flags
+
+| Flag        | Example                                | What it does                                                                                                       |
+| ----------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `--max-age` | `--max-age=2y`, `6mo`, `4w`, `30d`, `12h` | Only fetch issues/PRs/projects updated within this window. Useful for the first sync of very large repos (cli/cli, kubernetes/kubernetes). |
+
+`--max-age` is a floor on the effective `since`: on later runs the more-recent
+`synced_at` from `repo.yml` takes over automatically, so you can leave the flag
+in your sync command. Months count as 30 days and years as 365 days
+(approximate, not calendar-correct).
 
 ## What it syncs
 
@@ -28,6 +39,7 @@ re-fetched.
 | Milestones    | `github-data/milestones.yml`     | Always full sync |
 | Issues + PRs  | `github-data/issues/0042.md`     | Incremental      |
 | Projects (v2) | `github-data/projects/0001.md`   | Incremental      |
+| Discussions   | `github-data/discussions/0042.md`| Incremental      |
 | Releases      | `github-data/releases/v1.0.0.md` | Always full sync |
 | Repo metadata | `github-data/repo.yml`           | Updated each run |
 | Events        | `github-data/events/*.md`        | Since last sync  |
@@ -38,8 +50,10 @@ Each issue or PR is stored as a single markdown file with YAML frontmatter.
 Comments, reviews, review comments, and events follow as additional YAML
 documents separated by `---`, in chronological order.
 
-For pull requests, the program fetches branch info, merge status, and reviews
-from the Pulls API.
+For pull requests, the program fetches branch info and merge status from the
+Pulls REST API, and all PR reviews in one paginated GraphQL query (one query
+per ~100 PRs instead of one REST call per PR). PRs with more than 100 reviews
+log a warning and only the first 100 are exported.
 
 ### Projects (v2)
 
@@ -61,12 +75,33 @@ the first time the issue is touched on GitHub.
 Projects v2 is GraphQL-only, so this section uses the GitHub GraphQL endpoint
 instead of REST.
 
+### Discussions
+
+One file per discussion at `github-data/discussions/<number>.md`. Frontmatter
+includes `category`, `state`, `state_reason`, and — for Q&A categories where a
+reply has been marked as the answer — `answer_id`, `answer_chosen_at`,
+`answer_chosen_by`. Top-level comments are emitted as `document: comment` and
+nested replies as `document: reply` with a `parent_id` field linking back to
+the comment they reply to.
+
+Discussions are GraphQL-only. The list is fetched newest-first
+(`UPDATED_AT DESC`) and pagination stops when an item is older than the
+effective `since`, so `--max-age` is fully respected. Each page pulls up to 50
+discussions with up to 100 comments and 50 replies per comment; if a single
+discussion exceeds those limits a warning is logged and only the first
+N entries are exported.
+
 ### Incremental sync
 
 On second run, the program reads `synced_at` from `repo.yml` and passes it as
 `?since=` to the GitHub Issues API. Only issues with `updated_at >= synced_at`
 are re-fetched. Each touched issue file is fully rebuilt from the timeline
 endpoint.
+
+When `--max-age` is set on the first sync, the same `?since=` filter is used
+with the cutoff timestamp. The PR list is fetched sorted newest-first and
+pagination stops once it crosses the cutoff, so very large repos are practical
+to sync.
 
 ### Rate limiting
 
@@ -83,7 +118,7 @@ them. No configuration is needed; events are always exported when detected.
 
 Event types: `issue_created`, `issue_closed`, `issue_reopened`, `pr_created`,
 `pr_merged`, `pr_closed`, `comment_created`, `project_created`,
-`project_closed`, `item_added`.
+`project_closed`, `item_added`, `discussion_created`.
 
 Example event file (`events/20240916-140000-000-issue_created-42.md`):
 
@@ -110,8 +145,8 @@ during sync against the previous on-disk state.
 
 ## Output format
 
-See [data-model.md](data-model.md) for the full format specification. Example
-issue file:
+See [docs/data-model.md](docs/data-model.md) for the full format specification.
+Example issue file:
 
 ```markdown
 ---
@@ -149,6 +184,18 @@ created_at: 2024-09-16T14:00:00Z
 commit_sha: abc123f
 ---
 ```
+
+## Testing
+
+```bash
+go test -short ./...                       # unit tests only
+GITHUB_TOKEN=$(gh auth token) go test ./...   # full end-to-end suite
+```
+
+The end-to-end suite (`e2e_test.go`) runs a real sync of this repository's
+TEST-prefixed fixtures (issues `#1–#3`, PRs `#4–#6`, discussions `#7–#8`,
+project, releases, milestones) and asserts the exported files match. It
+auto-skips when `GITHUB_TOKEN` is unset or `-short` is passed.
 
 ## Installation
 

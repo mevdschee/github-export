@@ -19,9 +19,10 @@ const (
 	PRMerged       = "pr_merged"
 	PRClosed       = "pr_closed"
 	CommentCreated = "comment_created"
-	ProjectCreated = "project_created"
-	ProjectClosed  = "project_closed"
-	ItemAdded      = "item_added"
+	ProjectCreated    = "project_created"
+	ProjectClosed     = "project_closed"
+	ItemAdded         = "item_added"
+	DiscussionCreated = "discussion_created"
 )
 
 type Event struct {

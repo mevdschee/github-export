@@ -59,6 +59,9 @@ func TestE2E(t *testing.T) {
 	if err := sync.Releases(c, testOwner, testRepo, out); err != nil {
 		t.Fatalf("sync.Releases: %v", err)
 	}
+	if _, err := sync.Discussions(c, testOwner, testRepo, out, ""); err != nil {
+		t.Fatalf("sync.Discussions: %v", err)
+	}
 	if err := sync.Repo(c, testOwner, testRepo, out, time.Now().UTC().Format(time.RFC3339)); err != nil {
 		t.Fatalf("sync.Repo: %v", err)
 	}
@@ -74,6 +77,98 @@ func TestE2E(t *testing.T) {
 	t.Run("Project1_ItemsAndStatusField", func(t *testing.T) { checkProject1(t, out) })
 	t.Run("ReleaseTESTv001_WithBody", func(t *testing.T) { checkReleaseTEST(t, out) })
 	t.Run("RepoYml", func(t *testing.T) { checkRepoYml(t, out) })
+	t.Run("Discussion7_QAWithAnswer", func(t *testing.T) { checkDiscussion7(t, out) })
+	t.Run("Discussion8_GeneralPlain", func(t *testing.T) { checkDiscussion8(t, out) })
+}
+
+func checkDiscussion7(t *testing.T, out string) {
+	docs := parseDocs(t, filepath.Join(out, "discussions", "0007.md"))
+	if len(docs) == 0 {
+		t.Fatal("no docs in discussions/0007.md")
+	}
+	fr := docs[0].front
+	if toInt(fr["number"]) != 7 {
+		t.Errorf("number=%v, want 7", fr["number"])
+	}
+	if fr["type"] != "discussion" {
+		t.Errorf("type=%v, want discussion", fr["type"])
+	}
+	if fr["state"] != "open" {
+		t.Errorf("state=%v, want open", fr["state"])
+	}
+	if fr["category"] != "Q&A" {
+		t.Errorf("category=%v, want Q&A", fr["category"])
+	}
+	if fr["author"] != "mevdschee" {
+		t.Errorf("author=%v, want mevdschee", fr["author"])
+	}
+	if toInt(fr["answer_id"]) == 0 {
+		t.Errorf("answer_id missing or zero: %v", fr["answer_id"])
+	}
+	if s, _ := fr["answer_chosen_at"].(string); !strings.Contains(s, "T") {
+		t.Errorf("answer_chosen_at malformed: %q", s)
+	}
+	if fr["answer_chosen_by"] != "mevdschee" {
+		t.Errorf("answer_chosen_by=%v, want mevdschee", fr["answer_chosen_by"])
+	}
+	// Single discussion-body assertion for the suite.
+	if !strings.Contains(docs[0].body, "TEST Q&A discussion") {
+		t.Errorf("body missing seeded marker; got %q", docs[0].body)
+	}
+
+	// One comment, marked as answer.
+	var foundAnswerComment, foundReply bool
+	var commentID int
+	for _, d := range docs[1:] {
+		switch d.front["document"] {
+		case "comment":
+			if d.front["is_answer"] == true {
+				foundAnswerComment = true
+				commentID = toInt(d.front["id"])
+			}
+		case "reply":
+			foundReply = true
+			if pid := toInt(d.front["parent_id"]); commentID != 0 && pid != commentID {
+				t.Errorf("reply.parent_id=%d, want %d", pid, commentID)
+			}
+		}
+	}
+	if !foundAnswerComment {
+		t.Error("no comment with is_answer: true found")
+	}
+	if !foundReply {
+		t.Error("no nested reply found")
+	}
+}
+
+func checkDiscussion8(t *testing.T, out string) {
+	docs := parseDocs(t, filepath.Join(out, "discussions", "0008.md"))
+	fr := docs[0].front
+	if fr["type"] != "discussion" {
+		t.Errorf("type=%v, want discussion", fr["type"])
+	}
+	if fr["category"] != "General" {
+		t.Errorf("category=%v, want General", fr["category"])
+	}
+	if _, hasAnswer := fr["answer_id"]; hasAnswer {
+		t.Errorf("answer_id set on non-Q&A discussion: %v", fr["answer_id"])
+	}
+	if _, hasChosenAt := fr["answer_chosen_at"]; hasChosenAt {
+		t.Errorf("answer_chosen_at set on non-Q&A discussion: %v", fr["answer_chosen_at"])
+	}
+	// At least one top-level comment, no replies, no is_answer.
+	var commentCount int
+	for _, d := range docs[1:] {
+		if d.front["document"] == "comment" {
+			commentCount++
+			if d.front["is_answer"] == true {
+				t.Error("non-Q&A comment marked as is_answer")
+			}
+		}
+	}
+	if commentCount == 0 {
+		t.Error("no comments found on discussion #8")
+	}
 }
 
 func checkRepoYml(t *testing.T, out string) {
