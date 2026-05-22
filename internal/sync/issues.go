@@ -11,10 +11,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github-export/internal/document"
-	"github-export/internal/github"
-	"github-export/internal/hooks"
-	"github-export/internal/jsonutil"
+	"github.com/mevdschee/github-export/internal/document"
+	"github.com/mevdschee/github-export/internal/github"
+	"github.com/mevdschee/github-export/internal/hooks"
+	"github.com/mevdschee/github-export/internal/jsonutil"
 )
 
 func padWidth(maxNumber int64) int {

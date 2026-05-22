@@ -1,4 +1,4 @@
-module github-export
+module github.com/mevdschee/github-export
 
 go 1.22
 
