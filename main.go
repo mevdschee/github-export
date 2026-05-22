@@ -1,11 +1,14 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,13 +19,22 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: %s <owner/repo> [output-dir]\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "\nExports GitHub issues, PRs, releases, labels, and milestones\n")
-		fmt.Fprintf(os.Stderr, "to a local directory in markdown format.\n")
-		fmt.Fprintf(os.Stderr, "\nRuns incrementally on subsequent invocations.\n")
-		fmt.Fprintf(os.Stderr, "\nRequires GITHUB_TOKEN environment variable.\n")
-		fmt.Fprintf(os.Stderr, "  export GITHUB_TOKEN=$(gh auth token)\n")
+	maxAge := flag.String("max-age", "",
+		"only fetch issues/PRs/projects updated within this window (e.g. 2y, 6mo, 4w, 30d, 12h); useful for very large repos on first sync")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <owner/repo> [output-dir]\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Exports GitHub issues, PRs, releases, labels, and milestones\n")
+		fmt.Fprintf(os.Stderr, "to a local directory in markdown format.\n\n")
+		fmt.Fprintf(os.Stderr, "Runs incrementally on subsequent invocations.\n\n")
+		fmt.Fprintf(os.Stderr, "Requires GITHUB_TOKEN environment variable.\n")
+		fmt.Fprintf(os.Stderr, "  export GITHUB_TOKEN=$(gh auth token)\n\n")
+		fmt.Fprintf(os.Stderr, "Flags:\n")
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+	args := flag.Args()
+	if len(args) < 1 {
+		flag.Usage()
 		os.Exit(1)
 	}
 
@@ -36,18 +48,24 @@ func main() {
 	}
 
 	var owner, repo, outDir string
-
-	arg := os.Args[1]
-	if strings.Contains(arg, "/") {
-		parts := strings.SplitN(arg, "/", 2)
+	if strings.Contains(args[0], "/") {
+		parts := strings.SplitN(args[0], "/", 2)
 		owner = parts[0]
 		repo = parts[1]
 	}
-
-	if len(os.Args) >= 3 {
-		outDir = os.Args[2]
+	if len(args) >= 2 {
+		outDir = args[1]
 	} else {
 		outDir = "github-data"
+	}
+
+	cutoff := ""
+	if *maxAge != "" {
+		t, err := parseMaxAge(*maxAge)
+		if err != nil {
+			log.Fatalf("--max-age: %v", err)
+		}
+		cutoff = t.UTC().Format(time.RFC3339)
 	}
 
 	// Create output directories
@@ -72,9 +90,17 @@ func main() {
 	if cfg != nil {
 		since = cfg.SyncedAt
 	}
-	if since != "" {
+	// Treat --max-age as a floor: if it's more recent than synced_at (or
+	// synced_at is empty), the cutoff drives the next fetch.
+	if cutoff != "" && cutoff > since {
+		since = cutoff
+	}
+	switch {
+	case since != "" && cutoff == since:
+		log.Printf("First sync limited to items updated since %s (--max-age=%s)", since, *maxAge)
+	case since != "":
 		log.Printf("Incremental sync since %s", since)
-	} else {
+	default:
 		log.Println("Full sync (first run)")
 	}
 
@@ -114,6 +140,36 @@ func main() {
 			log.Printf("Warning: exporting events: %v", err)
 		}
 	}
+}
+
+var maxAgeRe = regexp.MustCompile(`^(\d+)(h|d|w|mo|y)$`)
+
+// parseMaxAge turns a human age like "2y", "6mo", "4w", "30d", "12h" into the
+// UTC timestamp that age ago. Months are taken as 30 days and years as 365
+// days — the cutoff is an approximate floor, not a calendar boundary.
+func parseMaxAge(s string) (time.Time, error) {
+	m := maxAgeRe.FindStringSubmatch(s)
+	if m == nil {
+		return time.Time{}, fmt.Errorf("must be Nh, Nd, Nw, Nmo or Ny (got %q)", s)
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil || n <= 0 {
+		return time.Time{}, fmt.Errorf("must be a positive integer (got %q)", m[1])
+	}
+	var d time.Duration
+	switch m[2] {
+	case "h":
+		d = time.Duration(n) * time.Hour
+	case "d":
+		d = time.Duration(n) * 24 * time.Hour
+	case "w":
+		d = time.Duration(n) * 7 * 24 * time.Hour
+	case "mo":
+		d = time.Duration(n) * 30 * 24 * time.Hour
+	case "y":
+		d = time.Duration(n) * 365 * 24 * time.Hour
+	}
+	return time.Now().Add(-d), nil
 }
 
 // summarizeEvents returns a stable "type=N, type=N, ..." breakdown of an event
