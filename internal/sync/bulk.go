@@ -88,16 +88,39 @@ func fetchAllIssueEvents(c *github.Client, owner, repo string) (map[int64][]map[
 	return result, nil
 }
 
-// fetchAllPRs fetches all pull requests for the repo using the
-// bulk endpoint GET /repos/{owner}/{repo}/pulls?state=all.
-// Returns PR details mapped by PR number.
+// fetchAllPRs fetches all pull requests for the repo using the bulk endpoint
+// GET /repos/{owner}/{repo}/pulls?state=all. Returns PR details mapped by PR
+// number.
+//
+// When `since` is non-empty the list is fetched sorted by `updated` descending
+// and pagination stops on the first page whose oldest item is older than
+// `since` — for cutoffs much smaller than the repo's PR history this saves
+// most of the round-trips. PRs older than `since` may still appear in the
+// last fetched page; callers should expect this and key by PR number.
+//
 // Note: the list endpoint doesn't include "merged" (boolean) or "merged_by",
 // so we infer "merged" from "merged_at".
-func fetchAllPRs(c *github.Client, owner, repo string) (map[int64]map[string]any, error) {
+func fetchAllPRs(c *github.Client, owner, repo, since string) (map[int64]map[string]any, error) {
 	log.Println("  Fetching all pull requests (bulk)...")
-	url := fmt.Sprintf("%s/repos/%s/%s/pulls?state=all&per_page=%d",
-		github.API, owner, repo, github.PerPage)
-	items, err := c.GetPaginated(url, nil)
+
+	var items []json.RawMessage
+	var err error
+	if since == "" {
+		url := fmt.Sprintf("%s/repos/%s/%s/pulls?state=all&per_page=%d",
+			github.API, owner, repo, github.PerPage)
+		items, err = c.GetPaginated(url, nil)
+	} else {
+		url := fmt.Sprintf("%s/repos/%s/%s/pulls?state=all&sort=updated&direction=desc&per_page=%d",
+			github.API, owner, repo, github.PerPage)
+		items, err = c.GetPaginatedUntil(url, nil, func(page []json.RawMessage) bool {
+			if len(page) == 0 {
+				return true
+			}
+			var last map[string]any
+			json.Unmarshal(page[len(page)-1], &last)
+			return jsonutil.Str(last, "updated_at") < since
+		})
+	}
 	if err != nil {
 		return nil, fmt.Errorf("fetching pull requests: %w", err)
 	}

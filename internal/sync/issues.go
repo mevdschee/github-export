@@ -198,7 +198,7 @@ func syncIssuesFull(c *github.Client, owner, repo, issueDir string, pad int, iss
 		ghEvents = make(map[int64][]map[string]any)
 	}
 
-	prDetails, err := fetchAllPRs(c, owner, repo)
+	prDetails, err := fetchAllPRs(c, owner, repo, "")
 	if err != nil {
 		log.Printf("  Warning: %v", err)
 		prDetails = make(map[int64]map[string]any)
@@ -259,7 +259,7 @@ func syncIssuesFull(c *github.Client, owner, repo, issueDir string, pad int, iss
 // API calls: N timeline + ~few pages bulk PRs (no separate PR detail or review calls).
 func syncIssuesIncremental(c *github.Client, owner, repo, issueDir string, pad int, issues []map[string]any, since string, issueProjects map[int64][]string) ([]hooks.Event, error) {
 	// Bulk fetch PR details (replaces N per-PR detail calls with ~few paginated pages)
-	prDetails, err := fetchAllPRs(c, owner, repo)
+	prDetails, err := fetchAllPRs(c, owner, repo, since)
 	if err != nil {
 		log.Printf("  Warning: %v", err)
 		prDetails = make(map[int64]map[string]any)

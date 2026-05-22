@@ -164,6 +164,13 @@ func (c *Client) GraphQL(query string, variables map[string]any) (json.RawMessag
 }
 
 func (c *Client) GetPaginated(url string, headers map[string]string) ([]json.RawMessage, error) {
+	return c.GetPaginatedUntil(url, headers, nil)
+}
+
+// GetPaginatedUntil is like GetPaginated but stops requesting further pages
+// once stop(currentPage) returns true. The current page is included in the
+// result. Pass nil to fetch all pages.
+func (c *Client) GetPaginatedUntil(url string, headers map[string]string, stop func([]json.RawMessage) bool) ([]json.RawMessage, error) {
 	var all []json.RawMessage
 	for url != "" {
 		resp, err := c.do(url, headers)
@@ -180,6 +187,10 @@ func (c *Client) GetPaginated(url string, headers map[string]string) ([]json.Raw
 			return all, fmt.Errorf("parsing response from %s: %w", url, err)
 		}
 		all = append(all, items...)
+
+		if stop != nil && stop(items) {
+			return all, nil
+		}
 
 		url = ""
 		if link := resp.Header.Get("Link"); link != "" {
