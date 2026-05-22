@@ -148,7 +148,8 @@ func fetchAllReviewComments(c *github.Client, owner, repo, since string) (map[in
 }
 
 // fetchReviews fetches reviews for a single PR.
-// Still per-PR since there is no bulk reviews endpoint.
+// Still per-PR since there is no bulk REST reviews endpoint — used as a
+// targeted fallback when GraphQL paths aren't suitable.
 func fetchReviews(c *github.Client, owner, repo string, number int64) ([]map[string]any, error) {
 	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/reviews?per_page=%d",
 		github.API, owner, repo, number, github.PerPage)
@@ -163,6 +164,120 @@ func fetchReviews(c *github.Client, owner, repo string, number int64) ([]map[str
 		reviews = append(reviews, m)
 	}
 	return reviews, nil
+}
+
+// bulkReviewsQuery fetches up to 100 PRs at a time, each with up to 100
+// reviews. Reviews on PRs with >100 reviews are truncated; the caller logs a
+// warning when `reviews.pageInfo.hasNextPage` is true.
+const bulkReviewsQuery = `
+query($owner: String!, $name: String!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(first: 100, after: $cursor, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number
+        reviews(first: 100) {
+          pageInfo { hasNextPage }
+          nodes {
+            databaseId
+            author { login }
+            state
+            commit { oid }
+            submittedAt
+            body
+          }
+        }
+      }
+    }
+  }
+}`
+
+// fetchAllReviewsGraphQL bulk-fetches PR reviews via GraphQL — one paginated
+// query per 100 PRs instead of one REST call per PR. Returns reviews shaped to
+// match the REST `/pulls/{n}/reviews` response so existing writer code keeps
+// working unchanged.
+//
+// PRs with more than 100 reviews are detected and warned about; truncation is
+// rare in practice and the warning lets the operator know to investigate.
+func fetchAllReviewsGraphQL(c *github.Client, owner, repo string) (map[int64][]map[string]any, error) {
+	log.Println("  Fetching all PR reviews (GraphQL bulk)...")
+	result := make(map[int64][]map[string]any)
+	cursor := ""
+	pageCount := 0
+
+	for {
+		vars := map[string]any{"owner": owner, "name": repo}
+		if cursor != "" {
+			vars["cursor"] = cursor
+		}
+		raw, err := c.GraphQL(bulkReviewsQuery, vars)
+		if err != nil {
+			return result, fmt.Errorf("fetching PR reviews: %w", err)
+		}
+		var resp struct {
+			Repository struct {
+				PullRequests struct {
+					PageInfo struct {
+						HasNextPage bool   `json:"hasNextPage"`
+						EndCursor   string `json:"endCursor"`
+					} `json:"pageInfo"`
+					Nodes []struct {
+						Number  int64 `json:"number"`
+						Reviews struct {
+							PageInfo struct {
+								HasNextPage bool `json:"hasNextPage"`
+							} `json:"pageInfo"`
+							Nodes []struct {
+								DatabaseID  int64  `json:"databaseId"`
+								Author      *struct{ Login string } `json:"author"`
+								State       string `json:"state"`
+								Commit      *struct{ OID string } `json:"commit"`
+								SubmittedAt string `json:"submittedAt"`
+								Body        string `json:"body"`
+							} `json:"nodes"`
+						} `json:"reviews"`
+					} `json:"nodes"`
+				} `json:"pullRequests"`
+			} `json:"repository"`
+		}
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			return result, fmt.Errorf("parsing reviews response: %w", err)
+		}
+		pageCount++
+
+		for _, pr := range resp.Repository.PullRequests.Nodes {
+			if pr.Reviews.PageInfo.HasNextPage {
+				log.Printf("  Warning: PR #%d has more than 100 reviews — only first 100 exported", pr.Number)
+			}
+			for _, r := range pr.Reviews.Nodes {
+				review := map[string]any{
+					"id":           r.DatabaseID,
+					"state":        r.State,
+					"submitted_at": r.SubmittedAt,
+					"body":         r.Body,
+				}
+				if r.Author != nil {
+					review["user"] = map[string]any{"login": r.Author.Login}
+				}
+				if r.Commit != nil {
+					review["commit_id"] = r.Commit.OID
+				}
+				result[pr.Number] = append(result[pr.Number], review)
+			}
+		}
+
+		if !resp.Repository.PullRequests.PageInfo.HasNextPage {
+			break
+		}
+		cursor = resp.Repository.PullRequests.PageInfo.EndCursor
+	}
+
+	total := 0
+	for _, rs := range result {
+		total += len(rs)
+	}
+	log.Printf("    %d reviews across %d PRs (%d page(s))", total, len(result), pageCount)
+	return result, nil
 }
 
 // timelineTimestamp returns the most appropriate timestamp for sorting a timeline entry.

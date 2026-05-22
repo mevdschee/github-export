@@ -210,24 +210,12 @@ func syncIssuesFull(c *github.Client, owner, repo, issueDir string, pad int, iss
 		reviewComments = make(map[int64][]map[string]any)
 	}
 
-	// Fetch reviews per PR (no bulk endpoint exists)
-	allReviews := make(map[int64][]map[string]any)
-	prCount := 0
-	for _, issue := range issues {
-		if issue["pull_request"] == nil {
-			continue
-		}
-		prCount++
-		number := jsonutil.Int(issue, "number")
-		reviews, err := fetchReviews(c, owner, repo, number)
-		if err != nil {
-			log.Printf("  Warning: reviews for #%d: %v", number, err)
-			continue
-		}
-		allReviews[number] = reviews
-	}
-	if prCount > 0 {
-		log.Printf("    %d PR review fetches", prCount)
+	// Bulk-fetch reviews for all PRs via GraphQL — one paginated query per 100
+	// PRs instead of one REST call per PR.
+	allReviews, err := fetchAllReviewsGraphQL(c, owner, repo)
+	if err != nil {
+		log.Printf("  Warning: %v", err)
+		allReviews = make(map[int64][]map[string]any)
 	}
 
 	// Write files and detect events

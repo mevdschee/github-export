@@ -7,10 +7,25 @@ import (
 )
 
 type RepoConfig struct {
-	Owner         string `yaml:"owner"`
-	Repo          string `yaml:"repo"`
-	DefaultBranch string `yaml:"default_branch,omitempty"`
-	SyncedAt      string `yaml:"synced_at,omitempty"`
+	Owner          string   `yaml:"owner"`
+	Repo           string   `yaml:"repo"`
+	DefaultBranch  string   `yaml:"default_branch,omitempty"`
+	Description    string   `yaml:"description,omitempty"`
+	Homepage       string   `yaml:"homepage,omitempty"`
+	Visibility     string   `yaml:"visibility,omitempty"`
+	Language       string   `yaml:"language,omitempty"`
+	License        string   `yaml:"license,omitempty"`
+	Topics         []string `yaml:"topics,omitempty"`
+	Archived       bool     `yaml:"archived"`
+	HasIssues      bool     `yaml:"has_issues"`
+	HasProjects    bool     `yaml:"has_projects"`
+	HasWiki        bool     `yaml:"has_wiki"`
+	HasPages       bool     `yaml:"has_pages"`
+	HasDiscussions bool     `yaml:"has_discussions"`
+	CreatedAt      string   `yaml:"created_at,omitempty"`
+	UpdatedAt      string   `yaml:"updated_at,omitempty"`
+	PushedAt       string   `yaml:"pushed_at,omitempty"`
+	SyncedAt       string   `yaml:"synced_at,omitempty"`
 }
 
 func ReadRepoConfig(path string) (*RepoConfig, error) {

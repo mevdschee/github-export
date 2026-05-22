@@ -1,18 +1,17 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/mevdschee/github-export/internal/config"
 	"github.com/mevdschee/github-export/internal/github"
 	"github.com/mevdschee/github-export/internal/hooks"
-	"github.com/mevdschee/github-export/internal/jsonutil"
 	"github.com/mevdschee/github-export/internal/sync"
 )
 
@@ -79,19 +78,8 @@ func main() {
 		log.Println("Full sync (first run)")
 	}
 
-	syncStart := time.Now().UTC()
+	syncStart := time.Now().UTC().Format(time.RFC3339)
 	client := github.NewClient(token)
-
-	// Fetch repo metadata for default_branch
-	defaultBranch := ""
-	repoURL := fmt.Sprintf("%s/repos/%s/%s", github.API, owner, repo)
-	if repoRaw, err := client.GetJSON(repoURL, nil); err != nil {
-		log.Printf("Warning: fetching repo metadata: %v", err)
-	} else {
-		var repoData map[string]any
-		json.Unmarshal(repoRaw, &repoData)
-		defaultBranch = jsonutil.Str(repoData, "default_branch")
-	}
 
 	// Sync all entities
 	if err := sync.Labels(client, owner, repo, outDir); err != nil {
@@ -112,26 +100,46 @@ func main() {
 	if err := sync.Releases(client, owner, repo, outDir); err != nil {
 		log.Printf("Warning: %v", err)
 	}
-
-	// Update repo.yml
-	newCfg := &config.RepoConfig{
-		Owner:         owner,
-		Repo:          repo,
-		DefaultBranch: defaultBranch,
-		SyncedAt:      syncStart.Format(time.RFC3339),
-	}
-	if err := config.WriteRepoConfig(configPath, newCfg); err != nil {
+	if err := sync.Repo(client, owner, repo, outDir, syncStart); err != nil {
 		log.Fatalf("Writing repo.yml: %v", err)
 	}
 
-	log.Printf("Done. synced_at=%s", newCfg.SyncedAt)
+	log.Printf("Done. synced_at=%s", syncStart)
 
 	// Export events as markdown files for agents to pick up
 	if len(events) > 0 {
 		eventsDir := filepath.Join(outDir, "events")
-		log.Printf("Exporting %d events to %s", len(events), eventsDir)
+		log.Printf("Exporting %d events to %s — %s", len(events), eventsDir, summarizeEvents(events))
 		if err := hooks.Export(eventsDir, events); err != nil {
 			log.Printf("Warning: exporting events: %v", err)
 		}
 	}
+}
+
+// summarizeEvents returns a stable "type=N, type=N, ..." breakdown of an event
+// slice, sorted by descending count then ascending type name.
+func summarizeEvents(events []hooks.Event) string {
+	counts := map[string]int{}
+	for _, ev := range events {
+		counts[ev.Type]++
+	}
+	type kv struct {
+		k string
+		n int
+	}
+	pairs := make([]kv, 0, len(counts))
+	for k, n := range counts {
+		pairs = append(pairs, kv{k, n})
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].n != pairs[j].n {
+			return pairs[i].n > pairs[j].n
+		}
+		return pairs[i].k < pairs[j].k
+	})
+	parts := make([]string, len(pairs))
+	for i, p := range pairs {
+		parts[i] = fmt.Sprintf("%s=%d", p.k, p.n)
+	}
+	return strings.Join(parts, ", ")
 }

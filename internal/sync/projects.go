@@ -142,6 +142,7 @@ func Projects(c *github.Client, owner, repo, outDir, since string) (map[int64][]
 
 		// Incremental: skip unchanged open projects
 		if since != "" && updatedAt < since && fileExists {
+			log.Printf("  Project #%d %q skipped (unchanged)", number, title)
 			continue
 		}
 

@@ -8,12 +8,62 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/mevdschee/github-export/internal/config"
 	"github.com/mevdschee/github-export/internal/document"
 	"github.com/mevdschee/github-export/internal/github"
 	"github.com/mevdschee/github-export/internal/jsonutil"
 
 	"gopkg.in/yaml.v3"
 )
+
+// Repo fetches repository-level metadata and writes it to repo.yml. The
+// syncedAt timestamp should be captured before any other sync calls so the
+// next incremental run picks up anything updated during this one.
+func Repo(c *github.Client, owner, repo, outDir, syncedAt string) error {
+	log.Println("Syncing repo metadata...")
+	url := fmt.Sprintf("%s/repos/%s/%s", github.API, owner, repo)
+	raw, err := c.GetJSON(url, nil)
+	if err != nil {
+		return fmt.Errorf("fetching repo metadata: %w", err)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return fmt.Errorf("parsing repo metadata: %w", err)
+	}
+
+	cfg := &config.RepoConfig{
+		Owner:          owner,
+		Repo:           repo,
+		DefaultBranch:  jsonutil.Str(data, "default_branch"),
+		Description:    jsonutil.Str(data, "description"),
+		Homepage:       jsonutil.Str(data, "homepage"),
+		Visibility:     jsonutil.Str(data, "visibility"),
+		Language:       jsonutil.Str(data, "language"),
+		License:        jsonutil.Str(jsonutil.Map(data, "license"), "name"),
+		Topics:         stringList(jsonutil.List(data, "topics")),
+		Archived:       jsonutil.Bool(data, "archived"),
+		HasIssues:      jsonutil.Bool(data, "has_issues"),
+		HasProjects:    jsonutil.Bool(data, "has_projects"),
+		HasWiki:        jsonutil.Bool(data, "has_wiki"),
+		HasPages:       jsonutil.Bool(data, "has_pages"),
+		HasDiscussions: jsonutil.Bool(data, "has_discussions"),
+		CreatedAt:      jsonutil.Str(data, "created_at"),
+		UpdatedAt:      jsonutil.Str(data, "updated_at"),
+		PushedAt:       jsonutil.Str(data, "pushed_at"),
+		SyncedAt:       syncedAt,
+	}
+	return config.WriteRepoConfig(filepath.Join(outDir, "repo.yml"), cfg)
+}
+
+func stringList(xs []any) []string {
+	out := make([]string, 0, len(xs))
+	for _, x := range xs {
+		if s, ok := x.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
 
 func Labels(c *github.Client, owner, repo, outDir string) error {
 	log.Println("Syncing labels...")
