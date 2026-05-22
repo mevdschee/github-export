@@ -1,6 +1,7 @@
 package github
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -87,6 +89,78 @@ func (c *Client) GetJSON(url string, headers map[string]string) (json.RawMessage
 	}
 	data, err := io.ReadAll(resp.Body)
 	return json.RawMessage(data), err
+}
+
+// GraphQL posts a query to the GitHub GraphQL endpoint. Variables may be nil.
+// Returns the contents of the "data" field. If the response contains "errors",
+// returns them joined as a single error (along with any partial data).
+func (c *Client) GraphQL(query string, variables map[string]any) (json.RawMessage, error) {
+	const endpoint = "https://api.github.com/graphql"
+
+	payload, err := json.Marshal(map[string]any{
+		"query":     query,
+		"variables": variables,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	// Rate limit handling (GraphQL uses the same headers)
+	if remaining := resp.Header.Get("X-RateLimit-Remaining"); remaining != "" {
+		if rem, err := strconv.Atoi(remaining); err == nil && rem < 100 {
+			if resetStr := resp.Header.Get("X-RateLimit-Reset"); resetStr != "" {
+				if resetUnix, err := strconv.ParseInt(resetStr, 10, 64); err == nil {
+					sleepDur := time.Until(time.Unix(resetUnix, 0))
+					if sleepDur > 0 {
+						log.Printf("GraphQL rate limit low (%d remaining), sleeping %s", rem, sleepDur.Round(time.Second))
+						time.Sleep(sleepDur + time.Second)
+					}
+				}
+			}
+		}
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != 200 {
+		return nil, apiError(endpoint, resp.StatusCode, body)
+	}
+
+	var result struct {
+		Data   json.RawMessage `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Path    []any  `json:"path"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("parsing graphql response: %w", err)
+	}
+	if len(result.Errors) > 0 {
+		var msgs []string
+		for _, e := range result.Errors {
+			msgs = append(msgs, e.Message)
+		}
+		return result.Data, fmt.Errorf("graphql: %s", strings.Join(msgs, "; "))
+	}
+	return result.Data, nil
 }
 
 func (c *Client) GetPaginated(url string, headers map[string]string) ([]json.RawMessage, error) {

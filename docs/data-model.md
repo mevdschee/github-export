@@ -16,6 +16,8 @@ github-data/
     0002.md
     0042.md
     0043.md
+  projects/                  # Projects v2 boards linked to this repo
+    0001.md                  # project file — one per open project
   releases/
     v1.0.0.md
     v1.2.0.md
@@ -226,6 +228,81 @@ Event-specific fields are added flat in frontmatter:
 | `locked`                                  | `lock_reason`                  |
 | `review_dismissed`                        | `dismissal_message`            |
 
+## Project File
+
+One file per **open** Projects v2 board linked to the repository, named by the
+project number (`projects/0001.md`). The frontmatter holds the project header
+and field definitions; the body is the project's readme; each linked item
+follows as an `item` sub-document with its current field values.
+
+Closed projects are not written — when a project transitions from open to
+closed, its file is deleted and a `project_closed` event is emitted. Draft
+issues (project-only items without an issue number) are skipped.
+
+```markdown
+---
+number: 1
+title: Q1 Roadmap
+state: open
+public: true
+url: https://github.com/orgs/acme/projects/1
+owner: acme
+description: Quarterly planning
+created_at: 2024-01-01T00:00:00Z
+updated_at: 2024-09-15T08:00:00Z
+fields:
+  - name: Status
+    type: SINGLE_SELECT
+    options:
+      - Todo
+      - In Progress
+      - Done
+  - name: Priority
+    type: SINGLE_SELECT
+    options:
+      - P0
+      - P1
+  - name: Iteration
+    type: ITERATION
+---
+
+Long-form project description / readme.
+
+---
+document: item
+type: issue
+number: 42
+title: Fix crash on empty input
+repo: acme/widgets
+fields:
+  Priority: P0
+  Status: In Progress
+---
+
+---
+document: item
+type: pull_request
+number: 43
+title: Handle empty input in parser
+repo: acme/widgets
+fields:
+  Status: Done
+---
+```
+
+When an issue or PR is on one or more projects, the issue file's frontmatter
+also lists them:
+
+```yaml
+projects:
+  - Q1 Roadmap
+  - Bugs
+```
+
+This is populated on the next sync that re-fetches the issue (an issue gets
+re-fetched when its `updated_at` advances, which happens whenever it is added
+to or removed from a project).
+
 ## Release File
 
 ```markdown
@@ -347,6 +424,7 @@ commit_sha: abc123f
 | `assignees`    | string list | Usernames                              |
 | `labels`       | string list | Label names                            |
 | `milestone`    | string      | Milestone title                        |
+| `projects`     | string list | Projects v2 boards the item is on      |
 | `reactions`    | map         | `{"+1": 2, "heart": 1}`, omit if none  |
 
 ### PR-only fields (when `type: pull_request`)

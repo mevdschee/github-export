@@ -32,7 +32,7 @@ func issueFilename(number int64, pad int) string {
 	return fmt.Sprintf("%0*d.md", pad, number)
 }
 
-func Issues(c *github.Client, owner, repo, outDir, since string) ([]hooks.Event, error) {
+func Issues(c *github.Client, owner, repo, outDir, since string, issueProjects map[int64][]string) ([]hooks.Event, error) {
 	log.Println("Syncing issues and pull requests...")
 
 	url := fmt.Sprintf("%s/repos/%s/%s/issues?state=all&sort=updated&direction=asc&per_page=%d",
@@ -79,9 +79,9 @@ func Issues(c *github.Client, owner, repo, outDir, since string) ([]hooks.Event,
 	log.Printf("  %d issues/PRs to process", len(issues))
 
 	if since == "" {
-		return syncIssuesFull(c, owner, repo, issueDir, pad, issues)
+		return syncIssuesFull(c, owner, repo, issueDir, pad, issues, issueProjects)
 	}
-	return syncIssuesIncremental(c, owner, repo, issueDir, pad, issues, since)
+	return syncIssuesIncremental(c, owner, repo, issueDir, pad, issues, since, issueProjects)
 }
 
 // detectEvents compares the current API data with the previous on-disk state
@@ -184,7 +184,7 @@ func detectCommentEvents(path string, issue map[string]any, isPR bool, timeline 
 // API calls: ~5 paginated fetches + 1 per PR (reviews only).
 // Compared to the per-issue approach (3 calls per issue), this is dramatically
 // fewer calls for repos with many issues.
-func syncIssuesFull(c *github.Client, owner, repo, issueDir string, pad int, issues []map[string]any) ([]hooks.Event, error) {
+func syncIssuesFull(c *github.Client, owner, repo, issueDir string, pad int, issues []map[string]any, issueProjects map[int64][]string) ([]hooks.Event, error) {
 	// Bulk fetch all supporting data
 	comments, err := fetchAllIssueComments(c, owner, repo, "")
 	if err != nil {
@@ -256,7 +256,7 @@ func syncIssuesFull(c *github.Client, owner, repo, issueDir string, pad int, iss
 		// Detect events before writing (so we can compare with previous state)
 		hookEvents = append(hookEvents, detectEvents(path, issue, isPR, pr, owner, repo)...)
 
-		if err := writeIssueFile(path, issue, isPR, pr, timeline); err != nil {
+		if err := writeIssueFile(path, issue, isPR, pr, timeline, issueProjects[number]); err != nil {
 			log.Printf("  Warning: writing #%d: %v", number, err)
 		}
 	}
@@ -269,7 +269,7 @@ func syncIssuesFull(c *github.Client, owner, repo, issueDir string, pad int, iss
 // details (saves N per-PR detail calls).
 //
 // API calls: N timeline + ~few pages bulk PRs (no separate PR detail or review calls).
-func syncIssuesIncremental(c *github.Client, owner, repo, issueDir string, pad int, issues []map[string]any, since string) ([]hooks.Event, error) {
+func syncIssuesIncremental(c *github.Client, owner, repo, issueDir string, pad int, issues []map[string]any, since string, issueProjects map[int64][]string) ([]hooks.Event, error) {
 	// Bulk fetch PR details (replaces N per-PR detail calls with ~few paginated pages)
 	prDetails, err := fetchAllPRs(c, owner, repo)
 	if err != nil {
@@ -313,7 +313,7 @@ func syncIssuesIncremental(c *github.Client, owner, repo, issueDir string, pad i
 		hookEvents = append(hookEvents, detectEvents(path, issue, isPR, pr, owner, repo)...)
 		hookEvents = append(hookEvents, detectCommentEvents(path, issue, isPR, timeline, since, owner, repo)...)
 
-		if err := writeIssueFile(path, issue, isPR, pr, timeline); err != nil {
+		if err := writeIssueFile(path, issue, isPR, pr, timeline, issueProjects[number]); err != nil {
 			log.Printf("  Warning: writing #%d: %v", number, err)
 		}
 	}
@@ -321,7 +321,7 @@ func syncIssuesIncremental(c *github.Client, owner, repo, issueDir string, pad i
 	return hookEvents, nil
 }
 
-func writeIssueFile(path string, issue map[string]any, isPR bool, pr map[string]any, timeline []map[string]any) error {
+func writeIssueFile(path string, issue map[string]any, isPR bool, pr map[string]any, timeline []map[string]any, projects []string) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return err
@@ -352,6 +352,9 @@ func writeIssueFile(path string, issue map[string]any, isPR bool, pr map[string]
 	d.List("labels", jsonutil.LabelNames(issue, "labels"))
 	if ms := jsonutil.Map(issue, "milestone"); ms != nil {
 		d.KV("milestone", jsonutil.Str(ms, "title"))
+	}
+	if len(projects) > 0 {
+		d.List("projects", projects)
 	}
 
 	// PR-specific fields

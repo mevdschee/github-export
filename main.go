@@ -100,10 +100,15 @@ func main() {
 	if err := sync.Milestones(client, owner, repo, outDir); err != nil {
 		log.Printf("Warning: %v", err)
 	}
-	events, err := sync.Issues(client, owner, repo, outDir, since)
+	issueProjects, projectEvents, err := sync.Projects(client, owner, repo, outDir, since)
 	if err != nil {
 		log.Printf("Warning: %v", err)
 	}
+	events, err := sync.Issues(client, owner, repo, outDir, since, issueProjects)
+	if err != nil {
+		log.Printf("Warning: %v", err)
+	}
+	events = append(events, projectEvents...)
 	if err := sync.Releases(client, owner, repo, outDir); err != nil {
 		log.Printf("Warning: %v", err)
 	}

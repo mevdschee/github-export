@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,6 +19,9 @@ const (
 	PRMerged       = "pr_merged"
 	PRClosed       = "pr_closed"
 	CommentCreated = "comment_created"
+	ProjectCreated = "project_created"
+	ProjectClosed  = "project_closed"
+	ItemAdded      = "item_added"
 )
 
 type Event struct {
@@ -27,9 +31,11 @@ type Event struct {
 	Author string
 	State  string
 	Labels []string
-	File   string // relative path to the issue/PR markdown file (e.g. "github-data/issues/0042.md")
+	File   string // relative path to the markdown file (e.g. "github-data/issues/0042.md")
 	Repo   string // "owner/repo"
 	Body   string // event-specific content: issue body for created, comment text for comments, empty for state changes
+	URL    string // overrides the default issue URL; set by project events to point at /projects/N
+	Extra  map[string]string // extra frontmatter fields written verbatim (in alphabetical order)
 }
 
 // Export writes each event as a markdown file in the events/ directory.
@@ -55,8 +61,22 @@ func Export(eventsDir string, events []Event) error {
 		d.List("labels", ev.Labels)
 		d.KV("file", ev.File)
 		d.KV("repo", ev.Repo)
-		d.KV("url", fmt.Sprintf("https://github.com/%s/issues/%d", ev.Repo, ev.Number))
+		url := ev.URL
+		if url == "" {
+			url = fmt.Sprintf("https://github.com/%s/issues/%d", ev.Repo, ev.Number)
+		}
+		d.KV("url", url)
 		d.KV("exported_at", now.Format(time.RFC3339))
+		if len(ev.Extra) > 0 {
+			keys := make([]string, 0, len(ev.Extra))
+			for k := range ev.Extra {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				d.KV(k, ev.Extra[k])
+			}
+		}
 
 		// Timestamp with sub-second index to guarantee unique filenames
 		name := fmt.Sprintf("%s-%03d-%s-%d.md",
