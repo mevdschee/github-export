@@ -22,8 +22,8 @@ re-fetched.
 
 ### Flags
 
-| Flag        | Example                                | What it does                                                                                                       |
-| ----------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Flag        | Example                                   | What it does                                                                                                                               |
+| ----------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `--max-age` | `--max-age=2y`, `6mo`, `4w`, `30d`, `12h` | Only fetch issues/PRs/projects updated within this window. Useful for the first sync of very large repos (cli/cli, kubernetes/kubernetes). |
 
 `--max-age` is a floor on the effective `since`: on later runs the more-recent
@@ -33,16 +33,16 @@ in your sync command. Months count as 30 days and years as 365 days
 
 ## What it syncs
 
-| Data          | Output                           | Sync mode        |
-| ------------- | -------------------------------- | ---------------- |
-| Labels        | `github-data/labels.yml`         | Always full sync |
-| Milestones    | `github-data/milestones.yml`     | Always full sync |
-| Issues + PRs  | `github-data/issues/0042.md`     | Incremental      |
-| Projects (v2) | `github-data/projects/0001.md`   | Incremental      |
-| Discussions   | `github-data/discussions/0042.md`| Incremental      |
-| Releases      | `github-data/releases/v1.0.0.md` | Always full sync |
-| Repo metadata | `github-data/repo.yml`           | Updated each run |
-| Events        | `github-data/events/*.md`        | Since last sync  |
+| Data          | Output                            | Sync mode        |
+| ------------- | --------------------------------- | ---------------- |
+| Labels        | `github-data/labels.yml`          | Always full sync |
+| Milestones    | `github-data/milestones.yml`      | Always full sync |
+| Issues + PRs  | `github-data/issues/0042.md`      | Incremental      |
+| Projects (v2) | `github-data/projects/0001.md`    | Incremental      |
+| Discussions   | `github-data/discussions/0042.md` | Incremental      |
+| Releases      | `github-data/releases/v1.0.0.md`  | Always full sync |
+| Repo metadata | `github-data/repo.yml`            | Updated each run |
+| Events        | `github-data/events/*.md`         | Since last sync  |
 
 ### Issues and pull requests
 
@@ -51,9 +51,9 @@ Comments, reviews, review comments, and events follow as additional YAML
 documents separated by `---`, in chronological order.
 
 For pull requests, the program fetches branch info and merge status from the
-Pulls REST API, and all PR reviews in one paginated GraphQL query (one query
-per ~100 PRs instead of one REST call per PR). PRs with more than 100 reviews
-log a warning and only the first 100 are exported.
+Pulls REST API, and all PR reviews in one paginated GraphQL query (one query per
+~100 PRs instead of one REST call per PR). PRs with more than 100 reviews log a
+warning and only the first 100 are exported.
 
 ### Projects (v2)
 
@@ -67,10 +67,10 @@ Only **open** projects are written. Closed ones are removed on next sync and
 emit a `project_closed` event. Draft issues (project-only items with no real
 issue number) are skipped.
 
-When an issue or PR is on a project, the issue's frontmatter gains a
-`projects:` list. This is populated on the next sync that re-fetches the issue
-— for issues that haven't changed since the last sync, the field will appear
-the first time the issue is touched on GitHub.
+When an issue or PR is on a project, the issue's frontmatter gains a `projects:`
+list. This is populated on the next sync that re-fetches the issue — for issues
+that haven't changed since the last sync, the field will appear the first time
+the issue is touched on GitHub.
 
 Projects v2 is GraphQL-only, so this section uses the GitHub GraphQL endpoint
 instead of REST.
@@ -81,15 +81,15 @@ One file per discussion at `github-data/discussions/<number>.md`. Frontmatter
 includes `category`, `state`, `state_reason`, and — for Q&A categories where a
 reply has been marked as the answer — `answer_id`, `answer_chosen_at`,
 `answer_chosen_by`. Top-level comments are emitted as `document: comment` and
-nested replies as `document: reply` with a `parent_id` field linking back to
-the comment they reply to.
+nested replies as `document: reply` with a `parent_id` field linking back to the
+comment they reply to.
 
 Discussions are GraphQL-only. The list is fetched newest-first
 (`UPDATED_AT DESC`) and pagination stops when an item is older than the
 effective `since`, so `--max-age` is fully respected. Each page pulls up to 50
 discussions with up to 100 comments and 50 replies per comment; if a single
-discussion exceeds those limits a warning is logged and only the first
-N entries are exported.
+discussion exceeds those limits a warning is logged and only the first N entries
+are exported.
 
 ### Incremental sync
 
@@ -146,6 +146,7 @@ during sync against the previous on-disk state.
 ## Output format
 
 See [docs/data-model.md](docs/data-model.md) for the full format specification.
+
 Example issue file:
 
 ```markdown
