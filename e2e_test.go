@@ -56,7 +56,7 @@ func TestE2E(t *testing.T) {
 	if _, err := sync.Issues(c, testOwner, testRepo, out, "", issueProjects); err != nil {
 		t.Fatalf("sync.Issues: %v", err)
 	}
-	if err := sync.Releases(c, testOwner, testRepo, out); err != nil {
+	if _, err := sync.Releases(c, testOwner, testRepo, out); err != nil {
 		t.Fatalf("sync.Releases: %v", err)
 	}
 	if _, err := sync.Discussions(c, testOwner, testRepo, out, ""); err != nil {

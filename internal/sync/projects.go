@@ -171,29 +171,83 @@ func Projects(c *github.Client, owner, repo, outDir, since string) (map[int64][]
 			}
 		}
 
-		// Detect events: project_created (new file) or item_added (diff against prev)
+		// Detect events: project_created (new file) or per-item diffs
 		if !fileExists {
 			events = append(events, projectEvent(hooks.ProjectCreated, p, path, repoSlug))
 		} else {
 			prevItems := readPrevProjectItems(path)
+			currentNumbers := map[int64]bool{}
 			for _, item := range items {
 				content := jsonutil.Map(item, "content")
 				if content == nil {
 					continue
 				}
 				n := jsonutil.Int(content, "number")
-				if n == 0 || prevItems[n] {
+				if n == 0 {
 					continue
 				}
-				ev := projectEvent(hooks.ItemAdded, p, path, repoSlug)
-				ev.Extra = map[string]string{
+				currentNumbers[n] = true
+				currFields := extractItemFields(item)
+				extra := itemExtra(n, content, item)
+
+				prev, existed := prevItems[n]
+				if !existed {
+					ev := projectEvent(hooks.ItemAdded, p, path, repoSlug)
+					ev.Extra = extra
+					events = append(events, ev)
+					continue
+				}
+				// Field-by-field diff
+				keys := map[string]bool{}
+				for k := range prev.Fields {
+					keys[k] = true
+				}
+				for k := range currFields {
+					keys[k] = true
+				}
+				for k := range keys {
+					if prev.Fields[k] == currFields[k] {
+						continue
+					}
+					evType := hooks.ItemFieldChanged
+					if k == "Status" {
+						evType = hooks.ItemStatusChanged
+					}
+					ev := projectEvent(evType, p, path, repoSlug)
+					ee := map[string]string{}
+					for ek, ev2 := range extra {
+						ee[ek] = ev2
+					}
+					ee["field_name"] = k
+					if v := prev.Fields[k]; v != "" {
+						ee["from_value"] = v
+					}
+					if v := currFields[k]; v != "" {
+						ee["to_value"] = v
+					}
+					ev.Extra = ee
+					events = append(events, ev)
+				}
+			}
+			// Items present before but missing now
+			for n, prev := range prevItems {
+				if currentNumbers[n] {
+					continue
+				}
+				ev := projectEvent(hooks.ItemRemoved, p, path, repoSlug)
+				ee := map[string]string{
 					"item_number": fmt.Sprintf("%d", n),
-					"item_title":  jsonutil.Str(content, "title"),
-					"item_type":   strings.ToLower(jsonutil.Str(item, "type")),
 				}
-				if r := jsonutil.Map(content, "repository"); r != nil {
-					ev.Extra["item_repo"] = jsonutil.Str(r, "nameWithOwner")
+				if prev.Title != "" {
+					ee["item_title"] = prev.Title
 				}
+				if prev.Type != "" {
+					ee["item_type"] = prev.Type
+				}
+				if prev.Repo != "" {
+					ee["item_repo"] = prev.Repo
+				}
+				ev.Extra = ee
 				events = append(events, ev)
 			}
 		}
@@ -446,10 +500,56 @@ func fieldValueString(fv map[string]any) string {
 	return ""
 }
 
-// prevProjectItems lists which issue/PR numbers were previously recorded as
-// items of a project file. Used to detect newly-added items.
-func readPrevProjectItems(path string) map[int64]bool {
-	out := map[int64]bool{}
+// prevProjectItem captures the state of a project item from a previously
+// written project file so we can diff against the freshly-fetched data.
+type prevProjectItem struct {
+	Title  string
+	Type   string
+	Repo   string
+	Fields map[string]string
+}
+
+// itemExtra builds the standard extra-fields map describing a project item.
+func itemExtra(n int64, content, item map[string]any) map[string]string {
+	out := map[string]string{
+		"item_number": fmt.Sprintf("%d", n),
+		"item_title":  jsonutil.Str(content, "title"),
+		"item_type":   strings.ToLower(jsonutil.Str(item, "type")),
+	}
+	if r := jsonutil.Map(content, "repository"); r != nil {
+		out["item_repo"] = jsonutil.Str(r, "nameWithOwner")
+	}
+	return out
+}
+
+// extractItemFields flattens a project item's fieldValues into name → string-value pairs.
+func extractItemFields(item map[string]any) map[string]string {
+	out := map[string]string{}
+	fvMap := jsonutil.Map(item, "fieldValues")
+	for _, fv := range jsonutil.List(fvMap, "nodes") {
+		fvm, _ := fv.(map[string]any)
+		if fvm == nil {
+			continue
+		}
+		fld := jsonutil.Map(fvm, "field")
+		if fld == nil {
+			continue
+		}
+		name := jsonutil.Str(fld, "name")
+		if name == "" {
+			continue
+		}
+		if v := fieldValueString(fvm); v != "" {
+			out[name] = v
+		}
+	}
+	return out
+}
+
+// readPrevProjectItems parses item sub-documents out of a previously written
+// project file and returns them keyed by issue/PR number.
+func readPrevProjectItems(path string) map[int64]*prevProjectItem {
+	out := map[int64]*prevProjectItem{}
 	f, err := os.Open(path)
 	if err != nil {
 		return out
@@ -465,10 +565,10 @@ func readPrevProjectItems(path string) map[int64]bool {
 	//   document: item
 	//   ...
 	//   number: 42
+	//   fields:
+	//     Status: In Progress
 	//   ---
-	// We walk by document and parse each one whose document field is "item".
 	scanner := bufio.NewScanner(f)
-	// Allow long lines (readmes can be big).
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	var current []string
@@ -478,12 +578,24 @@ func readPrevProjectItems(path string) map[int64]bool {
 			return
 		}
 		var doc struct {
-			Document string `yaml:"document"`
-			Number   int64  `yaml:"number"`
+			Document string            `yaml:"document"`
+			Number   int64             `yaml:"number"`
+			Title    string            `yaml:"title"`
+			Type     string            `yaml:"type"`
+			Repo     string            `yaml:"repo"`
+			Fields   map[string]string `yaml:"fields"`
 		}
 		if err := yaml.Unmarshal([]byte(strings.Join(current, "\n")), &doc); err == nil {
 			if doc.Document == "item" && doc.Number > 0 {
-				out[doc.Number] = true
+				if doc.Fields == nil {
+					doc.Fields = map[string]string{}
+				}
+				out[doc.Number] = &prevProjectItem{
+					Title:  doc.Title,
+					Type:   doc.Type,
+					Repo:   doc.Repo,
+					Fields: doc.Fields,
+				}
 			}
 		}
 		current = nil

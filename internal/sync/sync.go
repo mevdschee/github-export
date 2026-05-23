@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"github.com/mevdschee/github-export/internal/config"
 	"github.com/mevdschee/github-export/internal/document"
 	"github.com/mevdschee/github-export/internal/github"
+	"github.com/mevdschee/github-export/internal/hooks"
 	"github.com/mevdschee/github-export/internal/jsonutil"
 
 	"gopkg.in/yaml.v3"
@@ -135,17 +137,19 @@ func Milestones(c *github.Client, owner, repo, outDir string) error {
 	return os.WriteFile(filepath.Join(outDir, "milestones.yml"), data, 0644)
 }
 
-func Releases(c *github.Client, owner, repo, outDir string) error {
+func Releases(c *github.Client, owner, repo, outDir string) ([]hooks.Event, error) {
 	log.Println("Syncing releases...")
 	url := fmt.Sprintf("%s/repos/%s/%s/releases?per_page=%d", github.API, owner, repo, github.PerPage)
 	items, err := c.GetPaginated(url, nil)
 	if err != nil {
-		return fmt.Errorf("fetching releases: %w", err)
+		return nil, fmt.Errorf("fetching releases: %w", err)
 	}
 
 	relDir := filepath.Join(outDir, "releases")
 	os.MkdirAll(relDir, 0755)
+	repoSlug := owner + "/" + repo
 
+	var events []hooks.Event
 	for _, raw := range items {
 		var m map[string]any
 		json.Unmarshal(raw, &m)
@@ -188,6 +192,7 @@ func Releases(c *github.Client, owner, repo, outDir string) error {
 
 		safeTag := strings.ReplaceAll(tag, "/", "-")
 		path := filepath.Join(relDir, safeTag+".md")
+		prev := readPrevRelease(path)
 
 		f, err := os.Create(path)
 		if err != nil {
@@ -196,8 +201,75 @@ func Releases(c *github.Client, owner, repo, outDir string) error {
 		}
 		document.WriteFirstDoc(f, d.String(), jsonutil.Str(m, "body"))
 		f.Close()
+
+		if jsonutil.Bool(m, "draft") {
+			continue
+		}
+
+		prerelease := jsonutil.Bool(m, "prerelease")
+		base := hooks.Event{
+			Number: jsonutil.Int(m, "id"),
+			Title:  jsonutil.Str(m, "name"),
+			Author: jsonutil.UserLogin(m, "author"),
+			State:  "published",
+			File:   path,
+			Repo:   repoSlug,
+			URL:    jsonutil.Str(m, "html_url"),
+		}
+		if prerelease {
+			base.State = "prerelease"
+		}
+		extra := map[string]string{"tag": tag}
+
+		if !prev.exists {
+			ev := base
+			ev.Type = hooks.ReleasePublished
+			ev.Body = jsonutil.Str(m, "body")
+			ev.Extra = extra
+			events = append(events, ev)
+		} else if prev.prerelease && !prerelease {
+			ev := base
+			ev.Type = hooks.PrereleasePromoted
+			ev.Extra = extra
+			events = append(events, ev)
+		}
 	}
 
 	log.Printf("  %d releases", len(items))
-	return nil
+	return events, nil
+}
+
+type prevReleaseState struct {
+	exists     bool
+	prerelease bool
+}
+
+func readPrevRelease(path string) prevReleaseState {
+	f, err := os.Open(path)
+	if err != nil {
+		return prevReleaseState{}
+	}
+	defer f.Close()
+	out := prevReleaseState{exists: true}
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	if !scanner.Scan() || strings.TrimSpace(scanner.Text()) != "---" {
+		return out
+	}
+	var lines []string
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimSpace(line) == "---" {
+			break
+		}
+		lines = append(lines, line)
+	}
+	var fm struct {
+		Prerelease bool `yaml:"prerelease"`
+	}
+	if err := yaml.Unmarshal([]byte(strings.Join(lines, "\n")), &fm); err == nil {
+		out.prerelease = fm.Prerelease
+	}
+	return out
 }

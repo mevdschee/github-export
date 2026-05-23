@@ -22,10 +22,12 @@ func main() {
 	maxAge := flag.String("max-age", "",
 		"only fetch issues/PRs/projects updated within this window (e.g. 2y, 6mo, 4w, 30d, 12h); useful for very large repos on first sync")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <owner/repo> [output-dir]\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s [flags] [owner/repo] [output-dir]\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Exports GitHub issues, PRs, releases, labels, and milestones\n")
 		fmt.Fprintf(os.Stderr, "to a local directory in markdown format.\n\n")
 		fmt.Fprintf(os.Stderr, "Runs incrementally on subsequent invocations.\n\n")
+		fmt.Fprintf(os.Stderr, "If invoked with no arguments, the current directory is treated\n")
+		fmt.Fprintf(os.Stderr, "as an existing export and owner/repo are read from ./repo.yml.\n\n")
 		fmt.Fprintf(os.Stderr, "Requires GITHUB_TOKEN environment variable.\n")
 		fmt.Fprintf(os.Stderr, "  export GITHUB_TOKEN=$(gh auth token)\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
@@ -33,10 +35,6 @@ func main() {
 	}
 	flag.Parse()
 	args := flag.Args()
-	if len(args) < 1 {
-		flag.Usage()
-		os.Exit(1)
-	}
 
 	token := os.Getenv("GITHUB_TOKEN")
 	if token == "" {
@@ -48,15 +46,25 @@ func main() {
 	}
 
 	var owner, repo, outDir string
-	if strings.Contains(args[0], "/") {
-		parts := strings.SplitN(args[0], "/", 2)
-		owner = parts[0]
-		repo = parts[1]
-	}
-	if len(args) >= 2 {
-		outDir = args[1]
-	} else {
+	switch {
+	case len(args) == 0:
+		// Deduce mode: current directory must already hold a repo.yml from
+		// a previous sync. owner/repo are filled in from cfg below.
+		outDir = "."
+	case len(args) == 1:
+		if strings.Contains(args[0], "/") {
+			parts := strings.SplitN(args[0], "/", 2)
+			owner = parts[0]
+			repo = parts[1]
+		}
 		outDir = "github-data"
+	default:
+		if strings.Contains(args[0], "/") {
+			parts := strings.SplitN(args[0], "/", 2)
+			owner = parts[0]
+			repo = parts[1]
+		}
+		outDir = args[1]
 	}
 
 	cutoff := ""
@@ -83,6 +91,9 @@ func main() {
 		repo = cfg.Repo
 	}
 	if owner == "" || repo == "" {
+		if len(args) == 0 {
+			log.Fatalf("no owner/repo given and no repo.yml found in %s; pass owner/repo (e.g., octocat/Hello-World) or run from a directory that already has an export", outDir)
+		}
 		log.Fatal("owner/repo must be specified as first argument (e.g., octocat/Hello-World)")
 	}
 
@@ -123,9 +134,11 @@ func main() {
 		log.Printf("Warning: %v", err)
 	}
 	events = append(events, projectEvents...)
-	if err := sync.Releases(client, owner, repo, outDir); err != nil {
+	releaseEvents, err := sync.Releases(client, owner, repo, outDir)
+	if err != nil {
 		log.Printf("Warning: %v", err)
 	}
+	events = append(events, releaseEvents...)
 	discussionEvents, err := sync.Discussions(client, owner, repo, outDir, since)
 	if err != nil {
 		log.Printf("Warning: %v", err)

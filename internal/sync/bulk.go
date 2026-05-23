@@ -251,12 +251,12 @@ func fetchAllReviewsGraphQL(c *github.Client, owner, repo string) (map[int64][]m
 								HasNextPage bool `json:"hasNextPage"`
 							} `json:"pageInfo"`
 							Nodes []struct {
-								DatabaseID  int64  `json:"databaseId"`
+								DatabaseID  int64                   `json:"databaseId"`
 								Author      *struct{ Login string } `json:"author"`
-								State       string `json:"state"`
-								Commit      *struct{ OID string } `json:"commit"`
-								SubmittedAt string `json:"submittedAt"`
-								Body        string `json:"body"`
+								State       string                  `json:"state"`
+								Commit      *struct{ OID string }   `json:"commit"`
+								SubmittedAt string                  `json:"submittedAt"`
+								Body        string                  `json:"body"`
 							} `json:"nodes"`
 						} `json:"reviews"`
 					} `json:"nodes"`

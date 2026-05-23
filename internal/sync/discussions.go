@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,6 +12,8 @@ import (
 	"github.com/mevdschee/github-export/internal/document"
 	"github.com/mevdschee/github-export/internal/github"
 	"github.com/mevdschee/github-export/internal/hooks"
+
+	"gopkg.in/yaml.v3"
 )
 
 // listDiscussionsQuery fetches discussions sorted by updated_at descending so
@@ -117,7 +120,7 @@ func Discussions(c *github.Client, owner, repo, outDir, since string) ([]hooks.E
 				continue
 			}
 			path := filepath.Join(dir, fmt.Sprintf("%04d.md", d.Number))
-			isNew := !fileExistsOrFalse(path)
+			prev := readPrevDiscussion(path)
 
 			if err := writeDiscussionFile(path, d); err != nil {
 				log.Printf("  Warning: writing discussion #%d: %v", d.Number, err)
@@ -125,19 +128,7 @@ func Discussions(c *github.Client, owner, repo, outDir, since string) ([]hooks.E
 			}
 			processed++
 
-			if isNew {
-				events = append(events, hooks.Event{
-					Type:   hooks.DiscussionCreated,
-					Number: d.Number,
-					Title:  d.Title,
-					Author: d.Author.Login,
-					State:  discussionState(d),
-					File:   path,
-					Repo:   repoSlug,
-					URL:    d.URL,
-					Body:   d.Body,
-				})
-			}
+			events = append(events, detectDiscussionEvents(d, prev, path, repoSlug)...)
 		}
 
 		if hitCutoff || !resp.Repository.Discussions.PageInfo.HasNextPage {
@@ -181,19 +172,19 @@ type discussionComment struct {
 }
 
 type discussionNode struct {
-	Number         int64              `json:"number"`
-	Title          string             `json:"title"`
-	Body           string             `json:"body"`
-	CreatedAt      string             `json:"createdAt"`
-	UpdatedAt      string             `json:"updatedAt"`
-	Closed         bool               `json:"closed"`
-	ClosedAt       string             `json:"closedAt"`
-	StateReason    string             `json:"stateReason"`
-	Locked         bool               `json:"locked"`
-	URL            string             `json:"url"`
-	Author         discussionAuthor   `json:"author"`
-	Category       discussionCategory `json:"category"`
-	Labels         struct {
+	Number      int64              `json:"number"`
+	Title       string             `json:"title"`
+	Body        string             `json:"body"`
+	CreatedAt   string             `json:"createdAt"`
+	UpdatedAt   string             `json:"updatedAt"`
+	Closed      bool               `json:"closed"`
+	ClosedAt    string             `json:"closedAt"`
+	StateReason string             `json:"stateReason"`
+	Locked      bool               `json:"locked"`
+	URL         string             `json:"url"`
+	Author      discussionAuthor   `json:"author"`
+	Category    discussionCategory `json:"category"`
+	Labels      struct {
 		Nodes []struct {
 			Name string `json:"name"`
 		} `json:"nodes"`
@@ -209,6 +200,140 @@ type discussionNode struct {
 		} `json:"pageInfo"`
 		Nodes []discussionComment `json:"nodes"`
 	} `json:"comments"`
+}
+
+// prevDiscussion captures state from a previously-written discussion file used
+// to diff against the latest data.
+type prevDiscussion struct {
+	exists     bool
+	state      string
+	answerID   int64
+	commentIDs map[int64]bool
+}
+
+func detectDiscussionEvents(d discussionNode, prev *prevDiscussion, path, repoSlug string) []hooks.Event {
+	state := discussionState(d)
+	base := hooks.Event{
+		Number: d.Number,
+		Title:  d.Title,
+		Author: d.Author.Login,
+		State:  state,
+		File:   path,
+		Repo:   repoSlug,
+		URL:    d.URL,
+	}
+
+	var events []hooks.Event
+
+	if prev == nil || !prev.exists {
+		created := base
+		created.Type = hooks.DiscussionCreated
+		created.Body = d.Body
+		return append(events, created)
+	}
+
+	if state == "closed" && prev.state == "open" {
+		ev := base
+		ev.Type = hooks.DiscussionClosed
+		events = append(events, ev)
+	}
+
+	if d.Answer != nil && d.Answer.DatabaseID != 0 && prev.answerID == 0 {
+		ev := base
+		ev.Type = hooks.DiscussionAnswered
+		extra := map[string]string{
+			"answer_id": fmt.Sprintf("%d", d.Answer.DatabaseID),
+		}
+		if d.AnswerChosenAt != "" {
+			extra["answer_chosen_at"] = d.AnswerChosenAt
+		}
+		if d.AnswerChosenBy != nil && d.AnswerChosenBy.Login != "" {
+			extra["answer_chosen_by"] = d.AnswerChosenBy.Login
+		}
+		ev.Extra = extra
+		events = append(events, ev)
+	}
+
+	for _, c := range d.Comments.Nodes {
+		if prev.commentIDs[c.DatabaseID] {
+			continue
+		}
+		ev := base
+		ev.Type = hooks.DiscussionCommentCreated
+		ev.Author = c.Author.Login
+		ev.Body = c.Body
+		ev.Extra = map[string]string{
+			"comment_id": fmt.Sprintf("%d", c.DatabaseID),
+			"created_at": c.CreatedAt,
+		}
+		events = append(events, ev)
+	}
+
+	return events
+}
+
+// readPrevDiscussion parses the frontmatter and comment IDs from a previously
+// written discussion file. Returns a struct with exists=false if the file is
+// missing.
+func readPrevDiscussion(path string) *prevDiscussion {
+	out := &prevDiscussion{commentIDs: map[int64]bool{}}
+	f, err := os.Open(path)
+	if err != nil {
+		return out
+	}
+	defer f.Close()
+	out.exists = true
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	var current []string
+	inFrontmatter := false
+	first := true
+	flush := func() {
+		if len(current) == 0 {
+			return
+		}
+		raw := strings.Join(current, "\n")
+		if first {
+			first = false
+			var fm struct {
+				State    string `yaml:"state"`
+				AnswerID int64  `yaml:"answer_id"`
+			}
+			if err := yaml.Unmarshal([]byte(raw), &fm); err == nil {
+				out.state = fm.State
+				out.answerID = fm.AnswerID
+			}
+		} else {
+			var doc struct {
+				Document string `yaml:"document"`
+				ID       int64  `yaml:"id"`
+			}
+			if err := yaml.Unmarshal([]byte(raw), &doc); err == nil {
+				if doc.Document == "comment" && doc.ID > 0 {
+					out.commentIDs[doc.ID] = true
+				}
+			}
+		}
+		current = nil
+	}
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimSpace(line) == "---" {
+			if inFrontmatter {
+				flush()
+				inFrontmatter = false
+			} else {
+				inFrontmatter = true
+			}
+			continue
+		}
+		if inFrontmatter {
+			current = append(current, line)
+		}
+	}
+	return out
 }
 
 func discussionState(d discussionNode) string {

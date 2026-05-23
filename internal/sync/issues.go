@@ -129,6 +129,10 @@ func detectEvents(path string, issue map[string]any, isPR bool, pr map[string]an
 			ev := base
 			ev.Type = hooks.PRClosed
 			events = append(events, ev)
+		} else if state == "open" && prev.State == "closed" {
+			ev := base
+			ev.Type = hooks.PRReopened
+			events = append(events, ev)
 		}
 	} else {
 		if state == "closed" && prev.State == "open" {
@@ -146,34 +150,152 @@ func detectEvents(path string, issue map[string]any, isPR bool, pr map[string]an
 	return events
 }
 
-// detectCommentEvents finds new comments in the timeline created since the last sync.
-func detectCommentEvents(path string, issue map[string]any, isPR bool, timeline []map[string]any, since, owner, repo string) []hooks.Event {
+// detectTimelineEvents walks the timeline and emits one hook event per entry
+// that landed after the last sync. Only fires on incremental syncs (since != "").
+func detectTimelineEvents(path string, issue map[string]any, isPR bool, timeline []map[string]any, since, owner, repo string) []hooks.Event {
 	if since == "" {
 		return nil
 	}
 
 	number := jsonutil.Int(issue, "number")
+	title := jsonutil.Str(issue, "title")
+	state := jsonutil.Str(issue, "state")
+	labels := jsonutil.LabelNames(issue, "labels")
 	repoSlug := owner + "/" + repo
+
+	base := func(actor string) hooks.Event {
+		return hooks.Event{
+			Number: number,
+			Title:  title,
+			Author: actor,
+			State:  state,
+			Labels: labels,
+			File:   path,
+			Repo:   repoSlug,
+		}
+	}
 
 	var events []hooks.Event
 	for _, ev := range timeline {
 		evType := jsonutil.Str(ev, "event")
-		if evType != "commented" {
+		createdAt := jsonutil.Str(ev, "created_at")
+		if evType == "reviewed" {
+			createdAt = jsonutil.Str(ev, "submitted_at")
+		}
+		if createdAt == "" || createdAt < since {
 			continue
 		}
-		createdAt := jsonutil.Str(ev, "created_at")
-		if createdAt >= since {
-			events = append(events, hooks.Event{
-				Type:   hooks.CommentCreated,
-				Number: number,
-				Title:  jsonutil.Str(issue, "title"),
-				Author: jsonutil.UserLogin(ev, "user"),
-				State:  jsonutil.Str(issue, "state"),
-				Labels: jsonutil.LabelNames(issue, "labels"),
-				File:   path,
-				Repo:   repoSlug,
-				Body:   jsonutil.Str(ev, "body"),
-			})
+
+		actor := jsonutil.UserLogin(ev, "actor")
+
+		switch evType {
+		case "commented":
+			e := base(jsonutil.UserLogin(ev, "user"))
+			e.Type = hooks.CommentCreated
+			e.Body = jsonutil.Str(ev, "body")
+			events = append(events, e)
+
+		case "assigned", "unassigned":
+			e := base(actor)
+			if evType == "assigned" {
+				e.Type = hooks.Assigned
+			} else {
+				e.Type = hooks.Unassigned
+			}
+			if assignee := jsonutil.UserLogin(ev, "assignee"); assignee != "" {
+				e.Extra = map[string]string{"assignee": assignee}
+			}
+			events = append(events, e)
+
+		case "labeled", "unlabeled":
+			label := jsonutil.Map(ev, "label")
+			if label == nil {
+				continue
+			}
+			name := jsonutil.Str(label, "name")
+			if name == "" {
+				continue
+			}
+			e := base(actor)
+			if evType == "labeled" {
+				e.Type = hooks.LabelAdded
+			} else {
+				e.Type = hooks.LabelRemoved
+			}
+			e.Extra = map[string]string{"label": name}
+			events = append(events, e)
+
+		case "mentioned":
+			e := base(actor)
+			e.Type = hooks.Mentioned
+			events = append(events, e)
+
+		case "review_requested":
+			if !isPR {
+				continue
+			}
+			e := base(actor)
+			e.Type = hooks.PRReviewRequested
+			if reviewer := jsonutil.UserLogin(ev, "requested_reviewer"); reviewer != "" {
+				e.Extra = map[string]string{"reviewer": reviewer}
+			}
+			events = append(events, e)
+
+		case "reviewed":
+			if !isPR {
+				continue
+			}
+			e := base(jsonutil.UserLogin(ev, "user"))
+			e.Type = hooks.PRReviewed
+			e.Body = jsonutil.Str(ev, "body")
+			if rs := strings.ToLower(jsonutil.Str(ev, "state")); rs != "" {
+				e.Extra = map[string]string{"review_state": rs}
+			}
+			events = append(events, e)
+
+		case "ready_for_review":
+			if !isPR {
+				continue
+			}
+			e := base(actor)
+			e.Type = hooks.PRReadyForReview
+			events = append(events, e)
+
+		case "cross-referenced":
+			source := jsonutil.Map(ev, "source")
+			if source == nil {
+				continue
+			}
+			si := jsonutil.Map(source, "issue")
+			if si == nil || si["pull_request"] == nil {
+				// Only fire when the referencing source is a PR
+				continue
+			}
+			e := base(actor)
+			e.Type = hooks.LinkedToPR
+			extra := map[string]string{}
+			if n := jsonutil.Int(si, "number"); n > 0 {
+				extra["source_number"] = fmt.Sprintf("%d", n)
+			}
+			if sr := jsonutil.Map(si, "repository"); sr != nil {
+				if fn := jsonutil.Str(sr, "full_name"); fn != "" {
+					extra["source_repo"] = fn
+				}
+			}
+			if len(extra) > 0 {
+				e.Extra = extra
+			}
+			events = append(events, e)
+
+		case "connected":
+			e := base(actor)
+			e.Type = hooks.LinkedToPR
+			events = append(events, e)
+
+		case "marked_as_duplicate":
+			e := base(actor)
+			e.Type = hooks.DuplicateMarked
+			events = append(events, e)
 		}
 	}
 	return events
@@ -299,7 +421,7 @@ func syncIssuesIncremental(c *github.Client, owner, repo, issueDir string, pad i
 
 		// Detect events before writing (so we can compare with previous state)
 		hookEvents = append(hookEvents, detectEvents(path, issue, isPR, pr, owner, repo)...)
-		hookEvents = append(hookEvents, detectCommentEvents(path, issue, isPR, timeline, since, owner, repo)...)
+		hookEvents = append(hookEvents, detectTimelineEvents(path, issue, isPR, timeline, since, owner, repo)...)
 
 		if err := writeIssueFile(path, issue, isPR, pr, timeline, issueProjects[number]); err != nil {
 			log.Printf("  Warning: writing #%d: %v", number, err)

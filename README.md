@@ -13,12 +13,20 @@ Blog post: https://www.tqdev.com/2026-github-export-open-source-maintenance-ai/
 
 ```bash
 export GITHUB_TOKEN=$(gh auth token)
-./github-export [flags] owner/repo [output-dir]
+./github-export [flags] [owner/repo] [output-dir]
 ```
 
 The output directory defaults to `github-data/`. On the first run, all data is
 fetched. On subsequent runs, only issues and PRs updated since the last sync are
 re-fetched.
+
+Run with no arguments to sync the export in the current directory — owner/repo
+are read from `./repo.yml`, so this is the easiest way to update an existing
+export:
+
+```bash
+cd path/to/github-data && github-export
+```
 
 ### Flags
 
@@ -116,9 +124,24 @@ exports them as individual markdown files in `github-data/events/`. These files
 are designed as a handoff point: an agent reads them, acts on them, and deletes
 them. No configuration is needed; events are always exported when detected.
 
-Event types: `issue_created`, `issue_closed`, `issue_reopened`, `pr_created`,
-`pr_merged`, `pr_closed`, `comment_created`, `project_created`,
-`project_closed`, `item_added`, `discussion_created`.
+Event types:
+
+- Issues and PRs: `issue_created`, `issue_closed`, `issue_reopened`,
+  `pr_created`, `pr_merged`, `pr_closed`, `pr_reopened`, `comment_created`
+- PR review loop: `pr_review_requested`, `pr_reviewed` (with `review_state`),
+  `pr_ready_for_review`
+- Triage / activity: `assigned`, `unassigned`, `label_added`, `label_removed`,
+  `mentioned`, `linked_to_pr`, `duplicate_marked`
+- Discussions: `discussion_created`, `discussion_closed`, `discussion_answered`,
+  `discussion_comment_created`
+- Projects: `project_created`, `project_closed`, `item_added`, `item_removed`,
+  `item_status_changed`, `item_field_changed`
+- Releases: `release_published`, `prerelease_promoted`
+
+Timeline-derived events (`comment_created`, `assigned`, `label_added`,
+`pr_reviewed`, …) only fire on incremental syncs. The first full sync emits
+`*_created` events for each entity but skips the per-timeline history that
+already happened — otherwise it would flood `events/` with years of activity.
 
 Example event file (`events/20240916-140000-000-issue_created-42.md`):
 

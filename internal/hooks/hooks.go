@@ -18,11 +18,32 @@ const (
 	IssueReopened  = "issue_reopened"
 	PRMerged       = "pr_merged"
 	PRClosed       = "pr_closed"
+	PRReopened     = "pr_reopened"
 	CommentCreated = "comment_created"
-	ProjectCreated    = "project_created"
-	ProjectClosed     = "project_closed"
-	ItemAdded         = "item_added"
-	DiscussionCreated = "discussion_created"
+
+	Assigned          = "assigned"
+	Unassigned        = "unassigned"
+	LabelAdded        = "label_added"
+	LabelRemoved      = "label_removed"
+	Mentioned         = "mentioned"
+	LinkedToPR        = "linked_to_pr"
+	DuplicateMarked   = "duplicate_marked"
+	PRReviewRequested = "pr_review_requested"
+	PRReviewed        = "pr_reviewed"
+	PRReadyForReview  = "pr_ready_for_review"
+
+	ProjectCreated           = "project_created"
+	ProjectClosed            = "project_closed"
+	ItemAdded                = "item_added"
+	ItemRemoved              = "item_removed"
+	ItemStatusChanged        = "item_status_changed"
+	ItemFieldChanged         = "item_field_changed"
+	DiscussionCreated        = "discussion_created"
+	DiscussionClosed         = "discussion_closed"
+	DiscussionAnswered       = "discussion_answered"
+	DiscussionCommentCreated = "discussion_comment_created"
+	ReleasePublished         = "release_published"
+	PrereleasePromoted       = "prerelease_promoted"
 )
 
 type Event struct {
@@ -32,10 +53,10 @@ type Event struct {
 	Author string
 	State  string
 	Labels []string
-	File   string // relative path to the markdown file (e.g. "github-data/issues/0042.md")
-	Repo   string // "owner/repo"
-	Body   string // event-specific content: issue body for created, comment text for comments, empty for state changes
-	URL    string // overrides the default issue URL; set by project events to point at /projects/N
+	File   string            // relative path to the markdown file (e.g. "github-data/issues/0042.md")
+	Repo   string            // "owner/repo"
+	Body   string            // event-specific content: issue body for created, comment text for comments, empty for state changes
+	URL    string            // overrides the default issue URL; set by project events to point at /projects/N
 	Extra  map[string]string // extra frontmatter fields written verbatim (in alphabetical order)
 }
 

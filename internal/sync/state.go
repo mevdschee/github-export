@@ -10,9 +10,9 @@ import (
 
 // prevState holds the fields we need from an existing issue file to detect state transitions.
 type prevState struct {
-	State  string `yaml:"state"`
-	Type   string `yaml:"type"`
-	Merge  struct {
+	State string `yaml:"state"`
+	Type  string `yaml:"type"`
+	Merge struct {
 		Merged bool `yaml:"merged"`
 	} `yaml:"merge"`
 }
