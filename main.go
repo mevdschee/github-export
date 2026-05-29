@@ -49,8 +49,15 @@ func main() {
 	switch {
 	case len(args) == 0:
 		// Deduce mode: current directory must already hold a repo.yml from
-		// a previous sync. owner/repo are filled in from cfg below.
+		// a previous sync. owner/repo are filled in from cfg below. If the
+		// current directory has no repo.yml but a ./github-data folder does,
+		// treat that as the existing export.
 		outDir = "."
+		if _, err := os.Stat(filepath.Join(outDir, "repo.yml")); os.IsNotExist(err) {
+			if _, err := os.Stat(filepath.Join("github-data", "repo.yml")); err == nil {
+				outDir = "github-data"
+			}
+		}
 	case len(args) == 1:
 		if strings.Contains(args[0], "/") {
 			parts := strings.SplitN(args[0], "/", 2)
