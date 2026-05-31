@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"github.com/mevdschee/github-export/internal/graphqlmirror"
 	"github.com/mevdschee/github-export/internal/httpapi"
 	"github.com/mevdschee/github-export/internal/query"
+	"github.com/mevdschee/github-export/internal/shadow"
 	"github.com/mevdschee/github-export/internal/store"
 	"github.com/mevdschee/github-export/internal/sync"
 	"github.com/mevdschee/github-export/internal/writeproxy"
@@ -29,6 +31,7 @@ func runAPI(args []string) {
 	input := fs.String("input", "", "request body file ('-' for stdin)")
 	proxyMode := fs.String("proxy", "on", "proxy fallback: on|off")
 	repoPath := fs.String("repo-path", ".", "local git clone for content endpoints")
+	debugCompare := fs.Bool("debug-compare", false, "also fetch the path from GitHub and log any divergence from the local answer")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s api [flags] <path>\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Makes a single GitHub-API request, served locally when mirrored and proxied\n")
@@ -107,7 +110,17 @@ func runAPI(args []string) {
 	srv.Handler().ServeHTTP(rec, req)
 
 	res := rec.Result()
-	io.Copy(os.Stdout, res.Body)
+	out, _ := io.ReadAll(res.Body)
+	os.Stdout.Write(out)
+
+	// One-shot parity check: compare the local answer with GitHub synchronously
+	// (so the process does not exit before the diff is logged).
+	if *debugCompare && *method == "GET" && client != nil && res.StatusCode < 400 {
+		fetch := func(ctx context.Context, p string) (int, []byte, error) {
+			return proxy.Request(ctx, "GET", p, nil)
+		}
+		shadow.New(fetch, nil, owner+"/"+repo).Check(path, out)
+	}
 	if res.StatusCode >= 400 {
 		os.Exit(1)
 	}
