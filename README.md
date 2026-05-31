@@ -12,8 +12,10 @@ Blog post: https://www.tqdev.com/2026-github-export-open-source-maintenance-ai/
 
 ## Usage
 
-There are two subcommands: `sync` (GitHub → SQLite) and `export` (SQLite →
-markdown). Running with no subcommand defaults to `sync`.
+The core subcommands are `sync` (GitHub → SQLite) and `export` (SQLite →
+markdown). Running with no subcommand defaults to `sync`. On top of the store
+sit a GitHub-compatible HTTP API (`serve`), an MCP server (`mcp`), a `gh api`
+work-alike (`api`), and native read subcommands (`issue`/`pr`/`search`/`release`).
 
 ```bash
 export GITHUB_TOKEN=$(gh auth token)
@@ -49,6 +51,75 @@ updated within this window — useful for the first sync of very large repos
 later runs the more-recent `synced_at` recorded in the database takes over
 automatically, so you can leave the flag in your sync command. Months count as
 30 days and years as 365 days (approximate, not calendar-correct).
+
+## Serving the data (HTTP API, MCP, `gh`)
+
+Once synced, the same store can be served three ways. All of them answer
+mirrored reads from SQLite (and repo *content* — files, commits, branches — from
+a local git clone), and transparently proxy anything unmirrored, plus every
+write, to `api.github.com` using the server's `GITHUB_TOKEN`. They bind
+localhost and trust local callers (clients present no token).
+
+### `serve` — GitHub-compatible HTTP API + OpenAPI
+
+```bash
+./github-export serve --addr localhost:8080
+#   API docs:  http://localhost:8080/docs        (Redoc over the OpenAPI 3.1 spec)
+#   Spec:      http://localhost:8080/openapi.yaml
+#   Status:    http://localhost:8080/status       (freshness + per-entity counts)
+```
+
+Paths and JSON field names match GitHub's REST API, so you can point `gh` at it:
+
+```bash
+GH_HOST=localhost:8080 gh issue list      # served from SQLite, offline
+```
+
+Every mirrored response carries an `X-GitHub-Export-Synced-At` freshness header.
+Writes (and unmirrored reads) proxy to GitHub and then synchronously re-sync the
+touched entity, so a subsequent local read is immediately consistent. Use
+`--proxy=off` to run fully offline (writes/unmirrored reads then return `501`).
+
+Flags: `--proxy on|off`, `--repo-path .` (git clone for content endpoints),
+`--git-fetch`, `--auto-sync 15m` (background incremental sync), and
+`--debug-compare` (answer reads locally *and* remotely, diff, and log
+divergences; add `--debug-compare-file` to file deduplicated gap issues on
+`mevdschee/github-export`).
+
+> GraphQL (`POST /graphql`) is currently forwarded to GitHub. Projects v2 and
+> Discussions reads therefore work through the proxy; a SQLite-backed GraphQL
+> mirror is the next build-out.
+
+### `mcp` — Model Context Protocol server
+
+```bash
+./github-export mcp                 # stdio transport (default)
+./github-export mcp --http localhost:8081   # streamable-HTTP transport
+./github-export mcp --read-only     # register read tools only
+```
+
+Tool names mirror GitHub's official MCP server (`get_issue`, `list_issues`,
+`get_pull_request`, `search_issues`, `get_file_contents`, `create_issue`,
+`add_issue_comment`, `update_issue`, …) so existing agent configs work
+unchanged. Read tools resolve against the store/git clone; write tools proxy to
+GitHub and re-sync.
+
+### `api` — one-shot `gh api` work-alike
+
+```bash
+./github-export api '/repos/OWNER/REPO/issues?state=all'   # local when mirrored
+./github-export api --method PATCH --input - /repos/OWNER/REPO/issues/1
+```
+
+### Native read subcommands (no `gh` needed)
+
+```bash
+./github-export issue list --state all
+./github-export issue view 42 --json
+./github-export pr list
+./github-export search "is:pr label:bug broken"
+./github-export release list
+```
 
 ## What it syncs
 

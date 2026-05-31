@@ -26,7 +26,8 @@ func main() {
 
 	args := os.Args[1:]
 	sub := "sync"
-	if len(args) > 0 && (args[0] == "sync" || args[0] == "export") {
+	switch {
+	case len(args) > 0 && isSubcommand(args[0]):
 		sub = args[0]
 		args = args[1:]
 	}
@@ -34,9 +35,25 @@ func main() {
 	switch sub {
 	case "export":
 		runExport(args)
+	case "serve":
+		runServe(args)
+	case "api":
+		runAPI(args)
+	case "mcp":
+		runMCP(args)
+	case "issue", "pr", "search", "release":
+		runNative(sub, args)
 	default:
 		runSync(args)
 	}
+}
+
+func isSubcommand(s string) bool {
+	switch s {
+	case "sync", "export", "serve", "api", "mcp", "issue", "pr", "search", "release":
+		return true
+	}
+	return false
 }
 
 func runSync(args []string) {

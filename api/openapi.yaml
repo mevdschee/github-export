@@ -1,0 +1,261 @@
+openapi: 3.1.0
+info:
+  title: github-export local API
+  version: "1.0.0"
+  description: >
+    A GitHub-compatible read mirror served from a local SQLite store and a local
+    git clone. Mirrored reads are answered offline; any unmirrored read and all
+    writes fall through to api.github.com via the built-in proxy. Paths and JSON
+    field names match GitHub's REST API so existing clients (including `gh`) work
+    unchanged. The server binds localhost and requires no token from clients.
+servers:
+  - url: http://localhost:8080
+    description: Local serve address (default)
+tags:
+  - name: issues
+  - name: pulls
+  - name: repository
+  - name: search
+  - name: content
+  - name: meta
+paths:
+  /repos/{owner}/{repo}:
+    get:
+      tags: [repository]
+      summary: Get repository metadata
+      parameters:
+        - $ref: '#/components/parameters/owner'
+        - $ref: '#/components/parameters/repo'
+      responses:
+        '200':
+          description: Repository object (GitHub shape)
+          content:
+            application/json:
+              schema: { type: object }
+  /repos/{owner}/{repo}/issues:
+    get:
+      tags: [issues]
+      summary: List issues and pull requests
+      parameters:
+        - $ref: '#/components/parameters/owner'
+        - $ref: '#/components/parameters/repo'
+        - { name: state, in: query, schema: { type: string, enum: [open, closed, all], default: open } }
+        - { name: labels, in: query, schema: { type: string }, description: Comma-separated label names }
+        - { name: creator, in: query, schema: { type: string } }
+        - { name: assignee, in: query, schema: { type: string } }
+        - { name: milestone, in: query, schema: { type: string } }
+        - { name: since, in: query, schema: { type: string, format: date-time } }
+        - { name: sort, in: query, schema: { type: string, enum: [created, updated], default: created } }
+        - { name: direction, in: query, schema: { type: string, enum: [asc, desc], default: desc } }
+        - $ref: '#/components/parameters/perPage'
+        - $ref: '#/components/parameters/page'
+      responses:
+        '200':
+          description: Array of issue objects
+          headers:
+            Link: { $ref: '#/components/headers/Link' }
+            X-GitHub-Export-Synced-At: { $ref: '#/components/headers/SyncedAt' }
+          content:
+            application/json:
+              schema: { type: array, items: { type: object } }
+  /repos/{owner}/{repo}/issues/{number}:
+    get:
+      tags: [issues]
+      summary: Get an issue
+      parameters:
+        - $ref: '#/components/parameters/owner'
+        - $ref: '#/components/parameters/repo'
+        - $ref: '#/components/parameters/number'
+      responses:
+        '200': { description: Issue object, content: { application/json: { schema: { type: object } } } }
+  /repos/{owner}/{repo}/issues/{number}/comments:
+    get:
+      tags: [issues]
+      summary: List issue comments
+      parameters:
+        - $ref: '#/components/parameters/owner'
+        - $ref: '#/components/parameters/repo'
+        - $ref: '#/components/parameters/number'
+      responses:
+        '200': { description: Array of comment objects, content: { application/json: { schema: { type: array, items: { type: object } } } } }
+  /repos/{owner}/{repo}/issues/{number}/timeline:
+    get:
+      tags: [issues]
+      summary: List the issue/PR timeline
+      parameters:
+        - $ref: '#/components/parameters/owner'
+        - $ref: '#/components/parameters/repo'
+        - $ref: '#/components/parameters/number'
+      responses:
+        '200': { description: Array of timeline events, content: { application/json: { schema: { type: array, items: { type: object } } } } }
+  /repos/{owner}/{repo}/pulls:
+    get:
+      tags: [pulls]
+      summary: List pull requests
+      parameters:
+        - $ref: '#/components/parameters/owner'
+        - $ref: '#/components/parameters/repo'
+        - { name: state, in: query, schema: { type: string, enum: [open, closed, all], default: open } }
+        - $ref: '#/components/parameters/perPage'
+        - $ref: '#/components/parameters/page'
+      responses:
+        '200':
+          description: Array of pull request objects
+          headers:
+            Link: { $ref: '#/components/headers/Link' }
+          content: { application/json: { schema: { type: array, items: { type: object } } } }
+  /repos/{owner}/{repo}/pulls/{number}:
+    get:
+      tags: [pulls]
+      summary: Get a pull request
+      parameters:
+        - $ref: '#/components/parameters/owner'
+        - $ref: '#/components/parameters/repo'
+        - $ref: '#/components/parameters/number'
+      responses:
+        '200': { description: Pull request object, content: { application/json: { schema: { type: object } } } }
+  /repos/{owner}/{repo}/pulls/{number}/reviews:
+    get:
+      tags: [pulls]
+      summary: List reviews on a pull request
+      parameters:
+        - $ref: '#/components/parameters/owner'
+        - $ref: '#/components/parameters/repo'
+        - $ref: '#/components/parameters/number'
+      responses:
+        '200': { description: Array of review objects, content: { application/json: { schema: { type: array, items: { type: object } } } } }
+  /repos/{owner}/{repo}/pulls/{number}/comments:
+    get:
+      tags: [pulls]
+      summary: List review comments on a pull request
+      parameters:
+        - $ref: '#/components/parameters/owner'
+        - $ref: '#/components/parameters/repo'
+        - $ref: '#/components/parameters/number'
+      responses:
+        '200': { description: Array of review comment objects, content: { application/json: { schema: { type: array, items: { type: object } } } } }
+  /repos/{owner}/{repo}/labels:
+    get:
+      tags: [repository]
+      summary: List labels
+      parameters: [ { $ref: '#/components/parameters/owner' }, { $ref: '#/components/parameters/repo' } ]
+      responses: { '200': { description: Array of label objects, content: { application/json: { schema: { type: array, items: { type: object } } } } } }
+  /repos/{owner}/{repo}/milestones:
+    get:
+      tags: [repository]
+      summary: List milestones
+      parameters: [ { $ref: '#/components/parameters/owner' }, { $ref: '#/components/parameters/repo' } ]
+      responses: { '200': { description: Array of milestone objects, content: { application/json: { schema: { type: array, items: { type: object } } } } } }
+  /repos/{owner}/{repo}/releases:
+    get:
+      tags: [repository]
+      summary: List releases
+      parameters: [ { $ref: '#/components/parameters/owner' }, { $ref: '#/components/parameters/repo' } ]
+      responses: { '200': { description: Array of release objects, content: { application/json: { schema: { type: array, items: { type: object } } } } } }
+  /repos/{owner}/{repo}/releases/tags/{tag}:
+    get:
+      tags: [repository]
+      summary: Get a release by tag
+      parameters:
+        - $ref: '#/components/parameters/owner'
+        - $ref: '#/components/parameters/repo'
+        - { name: tag, in: path, required: true, schema: { type: string } }
+      responses: { '200': { description: Release object, content: { application/json: { schema: { type: object } } } } }
+  /repos/{owner}/{repo}/branches:
+    get:
+      tags: [content]
+      summary: List branches (from the local git clone)
+      parameters: [ { $ref: '#/components/parameters/owner' }, { $ref: '#/components/parameters/repo' } ]
+      responses: { '200': { description: Array of branch objects, content: { application/json: { schema: { type: array, items: { type: object } } } } } }
+  /repos/{owner}/{repo}/tags:
+    get:
+      tags: [content]
+      summary: List tags (from the local git clone)
+      parameters: [ { $ref: '#/components/parameters/owner' }, { $ref: '#/components/parameters/repo' } ]
+      responses: { '200': { description: Array of tag objects, content: { application/json: { schema: { type: array, items: { type: object } } } } } }
+  /repos/{owner}/{repo}/commits:
+    get:
+      tags: [content]
+      summary: List commits (from the local git clone)
+      parameters:
+        - $ref: '#/components/parameters/owner'
+        - $ref: '#/components/parameters/repo'
+        - { name: sha, in: query, schema: { type: string } }
+        - $ref: '#/components/parameters/perPage'
+        - $ref: '#/components/parameters/page'
+      responses: { '200': { description: Array of commit objects, content: { application/json: { schema: { type: array, items: { type: object } } } } } }
+  /repos/{owner}/{repo}/commits/{sha}:
+    get:
+      tags: [content]
+      summary: Get a commit (from the local git clone)
+      parameters:
+        - $ref: '#/components/parameters/owner'
+        - $ref: '#/components/parameters/repo'
+        - { name: sha, in: path, required: true, schema: { type: string } }
+      responses: { '200': { description: Commit object, content: { application/json: { schema: { type: object } } } } }
+  /repos/{owner}/{repo}/contents/{path}:
+    get:
+      tags: [content]
+      summary: Get file or directory contents (from the local git clone)
+      parameters:
+        - $ref: '#/components/parameters/owner'
+        - $ref: '#/components/parameters/repo'
+        - { name: path, in: path, required: true, schema: { type: string } }
+        - { name: ref, in: query, schema: { type: string } }
+      responses: { '200': { description: File object or directory listing, content: { application/json: { schema: { type: object } } } } }
+  /search/issues:
+    get:
+      tags: [search]
+      summary: Search issues and pull requests
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string }, description: "GitHub search query (is:, label:, author:, state:, milestone:, free text)" }
+        - $ref: '#/components/parameters/perPage'
+        - $ref: '#/components/parameters/page'
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_count: { type: integer }
+                  incomplete_results: { type: boolean }
+                  items: { type: array, items: { type: object } }
+  /status:
+    get:
+      tags: [meta]
+      summary: Local store status and freshness
+      responses:
+        '200':
+          description: Status object
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  owner: { type: string }
+                  repo: { type: string }
+                  synced_at: { type: string, format: date-time }
+                  proxy: { type: boolean }
+                  git: { type: boolean }
+                  counts: { type: object, additionalProperties: { type: integer } }
+  /openapi.yaml:
+    get:
+      tags: [meta]
+      summary: This OpenAPI document
+      responses: { '200': { description: OpenAPI 3.1 spec, content: { application/yaml: {} } } }
+components:
+  parameters:
+    owner: { name: owner, in: path, required: true, schema: { type: string } }
+    repo: { name: repo, in: path, required: true, schema: { type: string } }
+    number: { name: number, in: path, required: true, schema: { type: integer } }
+    perPage: { name: per_page, in: query, schema: { type: integer, default: 30, maximum: 100 } }
+    page: { name: page, in: query, schema: { type: integer, default: 1 } }
+  headers:
+    Link:
+      description: GitHub-style pagination links
+      schema: { type: string }
+    SyncedAt:
+      description: Timestamp of the last sync (freshness indicator)
+      schema: { type: string, format: date-time }

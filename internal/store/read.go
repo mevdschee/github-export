@@ -76,6 +76,25 @@ func (s *Store) ProjectItems(number int64) (items []map[string]any, exists bool,
 	}
 }
 
+// ProjectsForIssue returns the stored project cross-links for an issue/PR in
+// sync order (used to preserve them on a targeted re-sync).
+func (s *Store) ProjectsForIssue(number int64) ([]string, error) {
+	rows, err := s.db.Query("SELECT project FROM issue_projects WHERE issue_number = ? ORDER BY ord", number)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // MaxIssueNumber returns the largest stored issue/PR number (0 if none).
 func (s *Store) MaxIssueNumber() (int64, error) {
 	var n sql.NullInt64
