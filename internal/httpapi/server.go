@@ -7,13 +7,16 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/mevdschee/github-export/internal/gitbackend"
+	"github.com/mevdschee/github-export/internal/graphqlmirror"
 	"github.com/mevdschee/github-export/internal/query"
 	"github.com/mevdschee/github-export/internal/shadow"
 	"github.com/mevdschee/github-export/internal/writeproxy"
@@ -23,8 +26,9 @@ import (
 type Server struct {
 	q        *query.Query
 	proxy    *writeproxy.Proxy
-	git      *gitbackend.Backend // optional; nil disables local content endpoints
-	compare  *shadow.Comparator  // optional; --debug-compare parity harness
+	git      *gitbackend.Backend   // optional; nil disables local content endpoints
+	gql      *graphqlmirror.Mirror // optional; nil forwards all GraphQL to proxy
+	compare  *shadow.Comparator    // optional; --debug-compare parity harness
 	owner    string
 	repo     string
 	syncedAt string
@@ -36,6 +40,7 @@ type Config struct {
 	Query    *query.Query
 	Proxy    *writeproxy.Proxy
 	Git      *gitbackend.Backend
+	GraphQL  *graphqlmirror.Mirror
 	Compare  *shadow.Comparator
 	Owner    string
 	Repo     string
@@ -45,7 +50,7 @@ type Config struct {
 // New builds a Server and registers its routes.
 func New(cfg Config) *Server {
 	s := &Server{
-		q: cfg.Query, proxy: cfg.Proxy, git: cfg.Git, compare: cfg.Compare,
+		q: cfg.Query, proxy: cfg.Proxy, git: cfg.Git, gql: cfg.GraphQL, compare: cfg.Compare,
 		owner: cfg.Owner, repo: cfg.Repo, syncedAt: cfg.SyncedAt,
 		mux: http.NewServeMux(),
 	}
@@ -88,10 +93,10 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /search/issues", s.handleSearchIssues)
 
 	// GraphQL: Projects v2 and Discussions are GraphQL-only, and gh/MCP issue
-	// many reads as GraphQL. Local mirroring of GraphQL is not yet implemented,
-	// so the endpoint forwards to api.github.com — coverage stays complete via
-	// the proxy while the SQLite-backed mirror is built out.
-	m.HandleFunc("POST /graphql", s.handleProxy)
+	// many reads as GraphQL. Supported queries are served from SQLite; anything
+	// the mirror does not fully cover falls through to api.github.com so coverage
+	// stays complete.
+	m.HandleFunc("POST /graphql", s.handleGraphQL)
 
 	// Local git content endpoints (only when a backend is configured).
 	if s.git != nil {
@@ -230,6 +235,44 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	s.proxy.Forward(w, r)
+}
+
+// handleGraphQL tries the local mirror first and forwards to GitHub when the
+// query is not fully supported. The request body is buffered so it can be
+// replayed to the proxy on fallthrough.
+func (s *Server) handleGraphQL(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	r.Body.Close()
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	replayBody := func() {
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		r.ContentLength = int64(len(body))
+	}
+	if s.gql == nil {
+		replayBody()
+		s.handleProxy(w, r)
+		return
+	}
+	var req struct {
+		Query     string         `json:"query"`
+		Variables map[string]any `json:"variables"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil || req.Query == "" {
+		replayBody()
+		s.handleProxy(w, r)
+		return
+	}
+	if resp, ok := s.gql.Execute(req.Query, req.Variables); ok {
+		s.freshness(w)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(resp)
+		return
+	}
+	replayBody()
+	s.handleProxy(w, r)
 }
 
 // --- response helpers ---

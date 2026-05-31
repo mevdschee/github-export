@@ -14,6 +14,7 @@ import (
 
 	"github.com/mevdschee/github-export/internal/gitbackend"
 	"github.com/mevdschee/github-export/internal/github"
+	"github.com/mevdschee/github-export/internal/graphqlmirror"
 	"github.com/mevdschee/github-export/internal/httpapi"
 	"github.com/mevdschee/github-export/internal/query"
 	"github.com/mevdschee/github-export/internal/shadow"
@@ -119,9 +120,11 @@ func runServe(args []string) {
 		}
 	}
 
+	q := query.New(s)
 	srv := httpapi.New(httpapi.Config{
-		Query: query.New(s), Proxy: proxy, Git: git, Compare: comparator,
-		Owner: owner, Repo: repo, SyncedAt: syncedAt,
+		Query: q, Proxy: proxy, Git: git, Compare: comparator,
+		GraphQL: graphqlmirror.New(q, owner, repo),
+		Owner:   owner, Repo: repo, SyncedAt: syncedAt,
 	})
 
 	if *autoSync > 0 && client != nil {

@@ -86,9 +86,16 @@ Flags: `--proxy on|off`, `--repo-path .` (git clone for content endpoints),
 divergences; add `--debug-compare-file` to file deduplicated gap issues on
 `mevdschee/github-export`).
 
-> GraphQL (`POST /graphql`) is currently forwarded to GitHub. Projects v2 and
-> Discussions reads therefore work through the proxy; a SQLite-backed GraphQL
-> mirror is the next build-out.
+GraphQL (`POST /graphql`) is mirrored from SQLite for the common
+`repository(owner,name)` reads — `issue`/`pullRequest`/`discussion`,
+the `issues`/`pullRequests`/`discussions` connections (with `first`/`after`
+cursor pagination, `states`, `totalCount`, `nodes`/`edges`/`pageInfo`), nested
+`author`/`labels`/`assignees`/`comments`, and fragments/variables. The rule is
+strict: a query is served locally only if **every** requested field is one the
+mirror resolves correctly; the moment anything is unsupported (an unmapped
+field, a mutation, a repo we have not synced) the whole request is forwarded to
+`api.github.com`, so a response is never half-correct. Widening the covered
+field set is the main place this mirror grows.
 
 ### `mcp` — Model Context Protocol server
 
