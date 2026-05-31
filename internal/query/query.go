@@ -376,19 +376,40 @@ func (q *Query) SearchIssues(queryStr string, perPage, page int) ([]raw, int, er
 		return nil, 0, err
 	}
 
-	text := strings.ToLower(strings.Join(terms, " "))
 	var filtered []raw
-	if text == "" {
+	switch {
+	case len(terms) == 0:
 		filtered = matches
-	} else {
-		for _, m := range matches {
-			var doc map[string]any
-			if err := json.Unmarshal(m, &doc); err != nil {
-				continue
+	default:
+		// Try the FTS5 index first (relevance-ranked); intersect its ranked
+		// numbers with the qualifier-filtered set, preserving FTS order.
+		if nums, ok, err := q.s.SearchFTS(buildFTSQuery(terms)); err != nil {
+			return nil, 0, err
+		} else if ok {
+			byNum := map[int64]raw{}
+			for _, m := range matches {
+				var doc map[string]any
+				if json.Unmarshal(m, &doc) == nil {
+					byNum[int64(jsonInt(doc["number"]))] = m
+				}
 			}
-			hay := strings.ToLower(str(doc, "title") + "\n" + str(doc, "body"))
-			if strings.Contains(hay, text) {
-				filtered = append(filtered, m)
+			for _, n := range nums {
+				if r, present := byNum[n]; present {
+					filtered = append(filtered, r)
+				}
+			}
+		} else {
+			// Malformed FTS expression: degrade to a substring scan.
+			text := strings.ToLower(strings.Join(terms, " "))
+			for _, m := range matches {
+				var doc map[string]any
+				if err := json.Unmarshal(m, &doc); err != nil {
+					continue
+				}
+				hay := strings.ToLower(str(doc, "title") + "\n" + str(doc, "body"))
+				if strings.Contains(hay, text) {
+					filtered = append(filtered, m)
+				}
 			}
 		}
 	}
@@ -470,6 +491,28 @@ func scanRaw(rows *sql.Rows) ([]raw, error) {
 		out = append(out, raw(s))
 	}
 	return out, rows.Err()
+}
+
+// buildFTSQuery turns free-text terms into an FTS5 MATCH expression. Each term
+// is wrapped as a quoted string (embedded quotes doubled) and joined by spaces,
+// which FTS5 treats as an implicit AND — every term must appear.
+func buildFTSQuery(terms []string) string {
+	parts := make([]string, 0, len(terms))
+	for _, t := range terms {
+		t = strings.ReplaceAll(t, `"`, `""`)
+		parts = append(parts, `"`+t+`"`)
+	}
+	return strings.Join(parts, " ")
+}
+
+func jsonInt(v any) int64 {
+	switch n := v.(type) {
+	case float64:
+		return int64(n)
+	case int64:
+		return n
+	}
+	return 0
 }
 
 func splitQualifier(tok string) (key, val string, ok bool) {

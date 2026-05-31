@@ -76,6 +76,31 @@ func (s *Store) ProjectItems(number int64) (items []map[string]any, exists bool,
 	}
 }
 
+// SearchFTS returns the issue/PR numbers whose title or body match the FTS5
+// query, ordered by relevance (best first). An empty or malformed query returns
+// (nil, false) so the caller can fall back to a non-FTS path.
+func (s *Store) SearchFTS(ftsQuery string) (numbers []int64, ok bool, err error) {
+	if ftsQuery == "" {
+		return nil, false, nil
+	}
+	rows, err := s.db.Query(
+		"SELECT rowid FROM fts_issues WHERE fts_issues MATCH ? ORDER BY rank", ftsQuery)
+	if err != nil {
+		// A malformed MATCH expression is a user-input issue, not a store error:
+		// signal "no FTS result" so the caller can degrade gracefully.
+		return nil, false, nil
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var n int64
+		if err := rows.Scan(&n); err != nil {
+			return nil, false, err
+		}
+		numbers = append(numbers, n)
+	}
+	return numbers, true, rows.Err()
+}
+
 // ProjectsForIssue returns the stored project cross-links for an issue/PR in
 // sync order (used to preserve them on a targeted re-sync).
 func (s *Store) ProjectsForIssue(number int64) ([]string, error) {

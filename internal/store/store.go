@@ -13,8 +13,9 @@ import (
 )
 
 // schemaVersion is bumped whenever the schema changes; migrate() applies the
-// full schema for a fresh DB and is the hook point for future migrations.
-const schemaVersion = 1
+// base schema for a fresh DB and then runs each incremental migration in
+// migrations up to this version.
+const schemaVersion = 2
 
 const schemaSQL = `
 CREATE TABLE meta (
@@ -150,6 +151,15 @@ CREATE TABLE events (
 );
 `
 
+// migrations holds incremental schema upgrades applied after the base schema.
+// Index i upgrades the DB from version i+1 to i+2 (migrations[0]: v1→v2). Adding
+// a migration means appending here and bumping schemaVersion.
+var migrations = []string{
+	// v1 → v2: full-text search index over issue/PR titles and bodies. The issue
+	// number is used as the FTS rowid so matches join back to the issues table.
+	`CREATE VIRTUAL TABLE fts_issues USING fts5(title, body);`,
+}
+
 // Store wraps the SQLite connection. Methods come in three families: Upsert*
 // (write during sync), Prev*/*State (read prior state for change detection),
 // and All*/Pending* (read for export).
@@ -197,19 +207,47 @@ func (s *Store) migrate() error {
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
 		return fmt.Errorf("reading user_version: %w", err)
 	}
+	if v > schemaVersion {
+		return fmt.Errorf("database schema version %d is newer than supported %d; upgrade the tool", v, schemaVersion)
+	}
 	if v == schemaVersion {
 		return nil
 	}
+	// Fresh database: apply the base schema (version 1), then fall through to run
+	// any incremental migrations up to schemaVersion.
 	if v == 0 {
 		if _, err := s.db.Exec(schemaSQL); err != nil {
 			return fmt.Errorf("applying schema: %w", err)
 		}
-		if _, err := s.db.Exec(fmt.Sprintf("PRAGMA user_version=%d", schemaVersion)); err != nil {
-			return fmt.Errorf("setting user_version: %w", err)
-		}
-		return nil
+		v = 1
 	}
-	return fmt.Errorf("database schema version %d is newer than supported %d; upgrade the tool", v, schemaVersion)
+	// Apply incremental migrations. migrations[i] upgrades v=(i+1) to v=(i+2).
+	for v < schemaVersion {
+		stmt := migrations[v-1]
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("migration to v%d: %w", v+1, err)
+		}
+		v++
+	}
+	// Backfill the FTS index when it was just created on an existing DB.
+	if err := s.rebuildFTS(); err != nil {
+		return fmt.Errorf("backfilling search index: %w", err)
+	}
+	if _, err := s.db.Exec(fmt.Sprintf("PRAGMA user_version=%d", schemaVersion)); err != nil {
+		return fmt.Errorf("setting user_version: %w", err)
+	}
+	return nil
+}
+
+// rebuildFTS repopulates fts_issues from the issues table. It is idempotent:
+// safe to run on a fresh (empty) DB and on an upgrade that backfills history.
+func (s *Store) rebuildFTS() error {
+	if _, err := s.db.Exec("DELETE FROM fts_issues"); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(
+		"INSERT INTO fts_issues(rowid, title, body) SELECT number, COALESCE(title,''), COALESCE(body,'') FROM issues")
+	return err
 }
 
 // --- meta ---

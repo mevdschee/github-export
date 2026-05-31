@@ -115,6 +115,67 @@ func TestUpsertIssueRoundTripAndState(t *testing.T) {
 	}
 }
 
+func TestFTSSearch(t *testing.T) {
+	s := openTemp(t)
+	s.UpsertIssue(1, false, map[string]any{
+		"number": float64(1), "title": "Crash on startup", "body": "segfault when launching",
+	}, nil, nil, nil)
+	s.UpsertIssue(2, false, map[string]any{
+		"number": float64(2), "title": "Docs typo", "body": "fix the readme",
+	}, nil, nil, nil)
+
+	nums, ok, err := s.SearchFTS(`"segfault"`)
+	if err != nil || !ok {
+		t.Fatalf("SearchFTS ok=%v err=%v", ok, err)
+	}
+	if len(nums) != 1 || nums[0] != 1 {
+		t.Errorf("SearchFTS(segfault)=%v, want [1]", nums)
+	}
+
+	// Title is indexed too.
+	if nums, _, _ := s.SearchFTS(`"typo"`); len(nums) != 1 || nums[0] != 2 {
+		t.Errorf("SearchFTS(typo)=%v, want [2]", nums)
+	}
+
+	// Updating the body must update the index (delete-then-insert by rowid).
+	s.UpsertIssue(1, false, map[string]any{
+		"number": float64(1), "title": "Crash on startup", "body": "now fixed, no more crash",
+	}, nil, nil, nil)
+	if nums, _, _ := s.SearchFTS(`"segfault"`); len(nums) != 0 {
+		t.Errorf("stale FTS row after update: %v", nums)
+	}
+}
+
+func TestFTSMigrationBackfill(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.sqlite")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.UpsertIssue(7, false, map[string]any{
+		"number": float64(7), "title": "Legacy", "body": "indexable content here",
+	}, nil, nil, nil)
+	// Simulate a pre-FTS (v1) database: drop the index and roll the version back.
+	if _, err := s.db.Exec("DROP TABLE fts_issues"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec("PRAGMA user_version=1"); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	// Reopening must run the v1→v2 migration and backfill the existing issue.
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen/migrate: %v", err)
+	}
+	defer s2.Close()
+	nums, ok, err := s2.SearchFTS(`"indexable"`)
+	if err != nil || !ok || len(nums) != 1 || nums[0] != 7 {
+		t.Errorf("backfill search = %v ok=%v err=%v, want [7]", nums, ok, err)
+	}
+}
+
 func TestLabelsAndMilestonesReplace(t *testing.T) {
 	s := openTemp(t)
 	if err := s.ReplaceLabels([]map[string]any{

@@ -103,7 +103,16 @@ func (s *Store) UpsertIssue(number int64, isPR bool, issue, pr map[string]any, t
 		if err := replaceJoin(tx, "issue_assignees", "login", number, jsonutil.Logins(issue, "assignees")); err != nil {
 			return err
 		}
-		return replaceJoin(tx, "issue_projects", "project", number, projects)
+		if err := replaceJoin(tx, "issue_projects", "project", number, projects); err != nil {
+			return err
+		}
+		// Keep the full-text index in sync (delete-then-insert by rowid=number).
+		if _, err := tx.Exec("DELETE FROM fts_issues WHERE rowid = ?", number); err != nil {
+			return err
+		}
+		_, err = tx.Exec("INSERT INTO fts_issues(rowid, title, body) VALUES(?, ?, ?)",
+			number, jsonutil.Str(issue, "title"), jsonutil.Str(issue, "body"))
+		return err
 	})
 }
 
