@@ -16,7 +16,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mevdschee/github-export/internal/exporter"
 	"github.com/mevdschee/github-export/internal/github"
+	"github.com/mevdschee/github-export/internal/store"
 	"github.com/mevdschee/github-export/internal/sync"
 	"gopkg.in/yaml.v3"
 )
@@ -26,6 +28,15 @@ const (
 	testRepo  = "github-export"
 )
 
+// projectsSynced records whether Projects v2 data made it into the store. It is
+// false when the token lacks the read:project scope, in which case the
+// project-coupled assertions are skipped rather than reported as failures.
+var projectsSynced bool
+
+// TestE2E runs a real full sync of the TEST fixtures into a SQLite store, then
+// asserts on the store contents (the source of truth) and on a one-way markdown
+// export of that store. The export assertions parse the files structurally, so
+// they tolerate format evolution.
 func TestE2E(t *testing.T) {
 	token := os.Getenv("GITHUB_TOKEN")
 	if token == "" {
@@ -36,36 +47,29 @@ func TestE2E(t *testing.T) {
 	}
 
 	out := t.TempDir()
-	for _, sub := range []string{"issues", "releases", "projects"} {
-		if err := os.MkdirAll(filepath.Join(out, sub), 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", sub, err)
-		}
+	dbPath := filepath.Join(t.TempDir(), "e2e.sqlite")
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
 	}
+	defer s.Close()
 
 	c := github.NewClient(token)
-	if err := sync.Labels(c, testOwner, testRepo, out); err != nil {
-		t.Fatalf("sync.Labels: %v", err)
+	syncStart := time.Now().UTC().Format(time.RFC3339)
+	if _, err := sync.Run(c, s, testOwner, testRepo, "", syncStart); err != nil {
+		t.Fatalf("sync.Run: %v", err)
 	}
-	if err := sync.Milestones(c, testOwner, testRepo, out); err != nil {
-		t.Fatalf("sync.Milestones: %v", err)
-	}
-	issueProjects, _, err := sync.Projects(c, testOwner, testRepo, out, "")
-	if err != nil {
-		t.Fatalf("sync.Projects: %v", err)
-	}
-	if _, err := sync.Issues(c, testOwner, testRepo, out, "", issueProjects); err != nil {
-		t.Fatalf("sync.Issues: %v", err)
-	}
-	if _, err := sync.Releases(c, testOwner, testRepo, out); err != nil {
-		t.Fatalf("sync.Releases: %v", err)
-	}
-	if _, err := sync.Discussions(c, testOwner, testRepo, out, ""); err != nil {
-		t.Fatalf("sync.Discussions: %v", err)
-	}
-	if err := sync.Repo(c, testOwner, testRepo, out, time.Now().UTC().Format(time.RFC3339)); err != nil {
-		t.Fatalf("sync.Repo: %v", err)
+	if err := exporter.Export(s, out); err != nil {
+		t.Fatalf("exporter.Export: %v", err)
 	}
 
+	if projs, _ := s.AllProjects(); len(projs) > 0 {
+		projectsSynced = true
+	} else {
+		t.Log("no projects synced (token likely lacks read:project scope); skipping project assertions")
+	}
+
+	t.Run("Store", func(t *testing.T) { checkStore(t, s) })
 	t.Run("Labels", func(t *testing.T) { checkLabels(t, out) })
 	t.Run("Milestones", func(t *testing.T) { checkMilestones(t, out) })
 	t.Run("Issue1_OpenWithFullMetadata", func(t *testing.T) { checkIssue1(t, out) })
@@ -524,6 +528,9 @@ func checkPR6(t *testing.T, out string) {
 }
 
 func checkProject1(t *testing.T, out string) {
+	if !projectsSynced {
+		t.Skip("projects not synced (token lacks read:project scope)")
+	}
 	docs := parseDocs(t, filepath.Join(out, "projects", "0001.md"))
 	if len(docs) == 0 {
 		t.Fatal("no docs in projects/0001.md")
@@ -625,8 +632,103 @@ func checkCommonScalars(t *testing.T, fr map[string]any) {
 	if !containsString(toStringList(fr["labels"]), "TEST") {
 		t.Errorf("labels missing TEST: %v", fr["labels"])
 	}
-	if !containsString(toStringList(fr["projects"]), "TEST exporter fixtures") {
+	if projectsSynced && !containsString(toStringList(fr["projects"]), "TEST exporter fixtures") {
 		t.Errorf("projects missing %q: %v", "TEST exporter fixtures", fr["projects"])
+	}
+}
+
+// checkStore asserts the store holds the expected fixtures. The store is the
+// source of truth, so these checks are independent of the markdown format.
+func checkStore(t *testing.T, s *store.Store) {
+	owner, repo, err := s.OwnerRepo()
+	if err != nil || owner != testOwner || repo != testRepo {
+		t.Errorf("OwnerRepo = %s/%s (err %v), want %s/%s", owner, repo, err, testOwner, testRepo)
+	}
+	if at, _ := s.SyncedAt(); !strings.Contains(at, "T") {
+		t.Errorf("synced_at malformed or empty: %q", at)
+	}
+
+	issues, err := s.AllIssues()
+	if err != nil {
+		t.Fatalf("AllIssues: %v", err)
+	}
+	byNum := map[int64]store.IssueRow{}
+	for _, r := range issues {
+		byNum[r.Number] = r
+	}
+	for n := int64(1); n <= 6; n++ {
+		if _, ok := byNum[n]; !ok {
+			t.Errorf("issue #%d missing from store", n)
+		}
+	}
+	// #1 is a plain open issue; #4..#6 are PRs.
+	if r := byNum[1]; r.IsPR {
+		t.Error("#1 stored as PR, want issue")
+	}
+	for _, n := range []int64{4, 5, 6} {
+		if r, ok := byNum[n]; ok && !r.IsPR {
+			t.Errorf("#%d stored as issue, want PR", n)
+		}
+	}
+
+	// State transitions via typed columns.
+	if exists, state, isPR, merged, _ := s.IssueState(4); !exists || !isPR || state != "closed" || !merged {
+		t.Errorf("#4 state: exists=%v isPR=%v state=%q merged=%v, want merged closed PR", exists, isPR, state, merged)
+	}
+	if exists, state, _, _, _ := s.IssueState(1); !exists || state != "open" {
+		t.Errorf("#1 state=%q, want open", state)
+	}
+
+	if max, _ := s.MaxIssueNumber(); max < 6 {
+		t.Errorf("MaxIssueNumber=%d, want >=6", max)
+	}
+
+	// Discussions, projects, releases present.
+	discussions, _ := s.AllDiscussions()
+	dseen := map[int64]bool{}
+	for _, d := range discussions {
+		dseen[d.Number] = true
+	}
+	if !dseen[7] || !dseen[8] {
+		t.Errorf("discussions 7 and 8 expected in store; got %v", dseen)
+	}
+
+	if projectsSynced {
+		projects, _ := s.AllProjects()
+		found := false
+		for _, p := range projects {
+			if p.Number == 1 {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("project #1 missing from store")
+		}
+	}
+
+	releases, _ := s.AllReleases()
+	relFound := false
+	for _, m := range releases {
+		if tag, _ := m["tag_name"].(string); tag == "TEST-v0.0.1" {
+			relFound = true
+		}
+	}
+	if !relFound {
+		t.Error("release TEST-v0.0.1 missing from store")
+	}
+
+	// A full sync records *_created events; verify at least the issue/PR ones.
+	var eventCount int
+	if err := s.DB().QueryRow("SELECT COUNT(*) FROM events").Scan(&eventCount); err != nil {
+		t.Fatalf("counting events: %v", err)
+	}
+	if eventCount == 0 {
+		t.Error("no events recorded by full sync")
+	}
+	var created int
+	s.DB().QueryRow("SELECT COUNT(*) FROM events WHERE type IN ('issue_created','pr_created')").Scan(&created)
+	if created < 6 {
+		t.Errorf("issue/pr_created events = %d, want >=6", created)
 	}
 }
 

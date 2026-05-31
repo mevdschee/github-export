@@ -1,3 +1,6 @@
 .claude
 /github-data/
 github-export
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

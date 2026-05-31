@@ -1,47 +1,61 @@
 # github-export
 
-Export all GitHub issues, pull requests, discussions, releases, labels,
-milestones, and Projects (v2) from a repository into a local `github-data/`
-folder as plain markdown files. Runs incrementally on subsequent invocations.
+Sync all GitHub issues, pull requests, discussions, releases, labels,
+milestones, and Projects (v2) from a repository into a local SQLite database
+(`github.sqlite`), the primary store. Render that store to plain markdown files
+on demand. Runs incrementally on subsequent invocations.
 
-Designed so an agent can read, grep, and reason about GitHub data without API
-access.
+Designed so an agent can read, grep, query, and reason about GitHub data without
+API access.
 
 Blog post: https://www.tqdev.com/2026-github-export-open-source-maintenance-ai/
 
 ## Usage
 
+There are two subcommands: `sync` (GitHub → SQLite) and `export` (SQLite →
+markdown). Running with no subcommand defaults to `sync`.
+
 ```bash
 export GITHUB_TOKEN=$(gh auth token)
-./github-export [flags] [owner/repo] [output-dir]
+
+# 1. Sync into ./github.sqlite (the source of truth)
+./github-export sync [flags] [owner/repo]
+
+# 2. Render markdown from the database into ./github-data/ when you want it
+./github-export export [--out github-data]
 ```
 
-The output directory defaults to `github-data/`. On the first run, all data is
-fetched. On subsequent runs, only issues and PRs updated since the last sync are
-re-fetched.
+`owner/repo` is resolved from, in order: the argument, the existing database, or
+the `origin` git remote of the current directory — so inside a checked-out
+GitHub repo you can just run `github-export` with no arguments. On the first run
+all data is fetched; on later runs only issues and PRs updated since the last
+sync are re-fetched (the `synced_at` cursor lives in the database).
 
-Run with no arguments to sync the export in the current directory — owner/repo
-are read from `./repo.yml`, so this is the easiest way to update an existing
-export:
-
-```bash
-cd path/to/github-data && github-export
-```
+`export` is one-way: it reads the database and writes files, never the reverse.
+The database, not the markdown, is authoritative.
 
 ### Flags
 
-| Flag        | Example                                   | What it does                                                                                                                               |
-| ----------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--max-age` | `--max-age=2y`, `6mo`, `4w`, `30d`, `12h` | Only fetch issues/PRs/projects updated within this window. Useful for the first sync of very large repos (cli/cli, kubernetes/kubernetes). |
+`sync`: `--max-age` (see below), `--db` (database path, default
+`github.sqlite`).
+`export`: `--db` (database to read), `--out` (output directory, default
+`github-data`).
 
-`--max-age` is a floor on the effective `since`: on later runs the more-recent
-`synced_at` from `repo.yml` takes over automatically, so you can leave the flag
-in your sync command. Months count as 30 days and years as 365 days
-(approximate, not calendar-correct).
+#### `--max-age`
+
+`--max-age=2y` (also `6mo`, `4w`, `30d`, `12h`) only fetches issues/PRs/projects
+updated within this window — useful for the first sync of very large repos
+(cli/cli, kubernetes/kubernetes). It is a floor on the effective `since`: on
+later runs the more-recent `synced_at` recorded in the database takes over
+automatically, so you can leave the flag in your sync command. Months count as
+30 days and years as 365 days (approximate, not calendar-correct).
 
 ## What it syncs
 
-| Data          | Output                            | Sync mode        |
+Everything is stored in the SQLite database during `sync`; the paths below are
+where `export` renders each entity.
+
+| Data          | Exported to                       | Sync mode        |
 | ------------- | --------------------------------- | ---------------- |
 | Labels        | `github-data/labels.yml`          | Always full sync |
 | Milestones    | `github-data/milestones.yml`      | Always full sync |
@@ -101,10 +115,11 @@ are exported.
 
 ### Incremental sync
 
-On second run, the program reads `synced_at` from `repo.yml` and passes it as
+On second run, the program reads `synced_at` from the database and passes it as
 `?since=` to the GitHub Issues API. Only issues with `updated_at >= synced_at`
-are re-fetched. Each touched issue file is fully rebuilt from the timeline
-endpoint.
+are re-fetched. Each touched issue is fully rebuilt in the store from the
+timeline endpoint. Change detection diffs the incoming data against the existing
+row, so events are emitted without re-reading any markdown.
 
 When `--max-age` is set on the first sync, the same `?since=` filter is used
 with the cutoff timestamp. The PR list is fetched sorted newest-first and
@@ -218,8 +233,11 @@ GITHUB_TOKEN=$(gh auth token) go test ./...   # full end-to-end suite
 
 The end-to-end suite (`e2e_test.go`) runs a real sync of this repository's
 TEST-prefixed fixtures (issues `#1–#3`, PRs `#4–#6`, discussions `#7–#8`,
-project, releases, milestones) and asserts the exported files match. It
-auto-skips when `GITHUB_TOKEN` is unset or `-short` is passed.
+project, releases, milestones) into a SQLite store, asserts on the store
+contents, then renders a markdown export and asserts on the rendered files. It
+auto-skips when `GITHUB_TOKEN` is unset or `-short` is passed; project
+assertions are skipped when the token lacks the `read:project` scope. The
+`internal/store` package has standalone unit tests that need no token.
 
 ## Installation
 
