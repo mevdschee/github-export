@@ -105,11 +105,19 @@ field set is the main place this mirror grows.
 ./github-export mcp --read-only     # register read tools only
 ```
 
-Tool names mirror GitHub's official MCP server (`get_issue`, `list_issues`,
-`get_pull_request`, `search_issues`, `get_file_contents`, `create_issue`,
-`add_issue_comment`, `update_issue`, …) so existing agent configs work
+Tool names mirror GitHub's official MCP server so existing agent configs work
 unchanged. Read tools resolve against the store/git clone; write tools proxy to
 GitHub and re-sync.
+
+- Issues/PRs: `get_issue`, `get_issue_comments`, `list_issues`,
+  `get_pull_request`, `list_pull_requests`, `get_pull_request_reviews`,
+  `get_pull_request_comments`, `search_issues`
+- Discussions: `list_discussions`, `get_discussion`, `get_discussion_comments`
+- Content (local git): `get_file_contents`, `list_commits`, `get_commit`,
+  `list_branches`, `list_tags`, `search_code`
+- Releases / status: `list_releases`, `status`
+- Writes (proxy + re-sync): `create_issue`, `add_issue_comment`, `update_issue`,
+  `update_pull_request`, `merge_pull_request`
 
 ### `api` — one-shot `gh api` work-alike
 

@@ -26,7 +26,9 @@ func setup(t *testing.T, readOnly bool) *sdk.ClientSession {
 	s.UpsertIssue(1, false, map[string]any{
 		"number": float64(1), "title": "Bug", "state": "open",
 		"user": map[string]any{"login": "alice"}, "body": "broken",
-	}, nil, nil, nil)
+	}, nil, []map[string]any{
+		{"event": "commented", "body": "me too", "user": map[string]any{"login": "bob"}, "created_at": "2024-01-03T00:00:00Z"},
+	}, nil)
 
 	proxy := writeproxy.New("", nil)
 	proxy.Disabled = true
@@ -76,9 +78,11 @@ func TestToolNamesMatchGitHubMCP(t *testing.T) {
 		got[tool.Name] = true
 	}
 	for _, want := range []string{
-		"get_issue", "list_issues", "get_pull_request", "list_pull_requests",
-		"get_pull_request_reviews", "search_issues", "create_issue",
-		"add_issue_comment", "update_issue", "status",
+		"get_issue", "get_issue_comments", "list_issues", "get_pull_request",
+		"list_pull_requests", "get_pull_request_reviews", "get_pull_request_comments",
+		"list_discussions", "get_discussion", "get_discussion_comments",
+		"search_issues", "create_issue", "add_issue_comment", "update_issue",
+		"update_pull_request", "merge_pull_request", "status",
 	} {
 		if !got[want] {
 			t.Errorf("missing tool %q (have %v)", want, keys(got))
@@ -108,6 +112,14 @@ func TestListIssuesTool(t *testing.T) {
 	text := callText(t, cs, "list_issues", map[string]any{"state": "all"})
 	if !strings.Contains(text, "Bug") {
 		t.Errorf("list_issues missing issue: %s", text)
+	}
+}
+
+func TestIssueCommentsTool(t *testing.T) {
+	cs := setup(t, false)
+	text := callText(t, cs, "get_issue_comments", map[string]any{"issue_number": 1})
+	if !strings.Contains(text, "me too") {
+		t.Errorf("get_issue_comments missing comment: %s", text)
 	}
 }
 

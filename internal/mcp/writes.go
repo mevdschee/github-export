@@ -29,6 +29,18 @@ func (t *tools) registerWrites(s *mcp.Server) {
 		Description: "Update an issue (title/body/state). Proxies to GitHub and re-syncs the issue.",
 		InputSchema: schema(map[string]string{"owner": "string", "repo": "string", "issue_number": "integer", "title": "string", "body": "string", "state": "string"}, "issue_number"),
 	}, t.updateIssue)
+
+	s.AddTool(&mcp.Tool{
+		Name:        "update_pull_request",
+		Description: "Update a pull request (title/body/state). Proxies to GitHub and re-syncs the PR.",
+		InputSchema: schema(map[string]string{"owner": "string", "repo": "string", "pullNumber": "integer", "title": "string", "body": "string", "state": "string"}, "pullNumber"),
+	}, t.updatePull)
+
+	s.AddTool(&mcp.Tool{
+		Name:        "merge_pull_request",
+		Description: "Merge a pull request. Proxies to GitHub and re-syncs the PR.",
+		InputSchema: schema(map[string]string{"owner": "string", "repo": "string", "pullNumber": "integer", "merge_method": "string", "commit_title": "string"}, "pullNumber"),
+	}, t.mergePull)
 }
 
 func (t *tools) ownerRepo(req *mcp.CallToolRequest) (string, string) {
@@ -81,4 +93,29 @@ func (t *tools) updateIssue(ctx context.Context, req *mcp.CallToolRequest) (*mcp
 		}
 	}
 	return t.post(ctx, "PATCH", fmt.Sprintf("/repos/%s/%s/issues/%d", owner, repo, n), payload)
+}
+
+func (t *tools) updatePull(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	owner, repo := t.ownerRepo(req)
+	n := argInt(req.Params.Arguments, "pullNumber")
+	payload := map[string]any{}
+	for _, k := range []string{"title", "body", "state"} {
+		if v := argStr(req.Params.Arguments, k); v != "" {
+			payload[k] = v
+		}
+	}
+	return t.post(ctx, "PATCH", fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, n), payload)
+}
+
+func (t *tools) mergePull(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	owner, repo := t.ownerRepo(req)
+	n := argInt(req.Params.Arguments, "pullNumber")
+	payload := map[string]any{}
+	if v := argStr(req.Params.Arguments, "merge_method"); v != "" {
+		payload["merge_method"] = v
+	}
+	if v := argStr(req.Params.Arguments, "commit_title"); v != "" {
+		payload["commit_title"] = v
+	}
+	return t.post(ctx, "PUT", fmt.Sprintf("/repos/%s/%s/pulls/%d/merge", owner, repo, n), payload)
 }

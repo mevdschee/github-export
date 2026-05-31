@@ -145,10 +145,40 @@ func (t *tools) registerReads(s *mcp.Server) {
 	}, t.listPulls)
 
 	s.AddTool(&mcp.Tool{
+		Name:        "get_issue_comments",
+		Description: "List comments on an issue or PR from the local mirror.",
+		InputSchema: schema(map[string]string{"owner": "string", "repo": "string", "issue_number": "integer"}, "issue_number"),
+	}, t.issueComments)
+
+	s.AddTool(&mcp.Tool{
 		Name:        "get_pull_request_reviews",
 		Description: "List reviews on a pull request from the local mirror.",
 		InputSchema: schema(map[string]string{"owner": "string", "repo": "string", "pullNumber": "integer"}, "pullNumber"),
 	}, t.pullReviews)
+
+	s.AddTool(&mcp.Tool{
+		Name:        "get_pull_request_comments",
+		Description: "List inline review comments on a pull request from the local mirror.",
+		InputSchema: schema(map[string]string{"owner": "string", "repo": "string", "pullNumber": "integer"}, "pullNumber"),
+	}, t.pullReviewComments)
+
+	s.AddTool(&mcp.Tool{
+		Name:        "list_discussions",
+		Description: "List discussions from the local mirror.",
+		InputSchema: schema(map[string]string{"owner": "string", "repo": "string"}),
+	}, t.listDiscussions)
+
+	s.AddTool(&mcp.Tool{
+		Name:        "get_discussion",
+		Description: "Get a discussion by number from the local mirror.",
+		InputSchema: schema(map[string]string{"owner": "string", "repo": "string", "discussionNumber": "integer"}, "discussionNumber"),
+	}, t.getDiscussion)
+
+	s.AddTool(&mcp.Tool{
+		Name:        "get_discussion_comments",
+		Description: "List top-level comments on a discussion from the local mirror.",
+		InputSchema: schema(map[string]string{"owner": "string", "repo": "string", "discussionNumber": "integer"}, "discussionNumber"),
+	}, t.getDiscussionComments)
 
 	s.AddTool(&mcp.Tool{
 		Name:        "search_issues",
@@ -180,6 +210,24 @@ func (t *tools) registerReads(s *mcp.Server) {
 			Description: "List commits from the local git clone.",
 			InputSchema: schema(map[string]string{"owner": "string", "repo": "string", "sha": "string", "perPage": "integer", "page": "integer"}),
 		}, t.listCommits)
+
+		s.AddTool(&mcp.Tool{
+			Name:        "get_commit",
+			Description: "Get a single commit by SHA/ref from the local git clone.",
+			InputSchema: schema(map[string]string{"owner": "string", "repo": "string", "sha": "string"}, "sha"),
+		}, t.getCommit)
+
+		s.AddTool(&mcp.Tool{
+			Name:        "list_branches",
+			Description: "List branches from the local git clone.",
+			InputSchema: schema(map[string]string{"owner": "string", "repo": "string"}),
+		}, t.listBranches)
+
+		s.AddTool(&mcp.Tool{
+			Name:        "list_tags",
+			Description: "List tags from the local git clone.",
+			InputSchema: schema(map[string]string{"owner": "string", "repo": "string"}),
+		}, t.listTags)
 
 		s.AddTool(&mcp.Tool{
 			Name:        "search_code",
@@ -239,12 +287,79 @@ func (t *tools) listPulls(_ context.Context, req *mcp.CallToolRequest) (*mcp.Cal
 	return t.rawArrayResult(items), nil
 }
 
+func (t *tools) issueComments(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	items, err := t.d.Query.IssueComments(argInt(req.Params.Arguments, "issue_number"))
+	if err != nil {
+		return errResult(err), nil
+	}
+	return t.rawArrayResult(items), nil
+}
+
 func (t *tools) pullReviews(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	items, err := t.d.Query.PullReviews(argInt(req.Params.Arguments, "pullNumber"))
 	if err != nil {
 		return errResult(err), nil
 	}
 	return t.rawArrayResult(items), nil
+}
+
+func (t *tools) pullReviewComments(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	items, err := t.d.Query.PullReviewComments(argInt(req.Params.Arguments, "pullNumber"))
+	if err != nil {
+		return errResult(err), nil
+	}
+	return t.rawArrayResult(items), nil
+}
+
+func (t *tools) listDiscussions(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	items, err := t.d.Query.ListDiscussions()
+	if err != nil {
+		return errResult(err), nil
+	}
+	return t.rawArrayResult(items), nil
+}
+
+func (t *tools) getDiscussion(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	doc, ok, err := t.d.Query.GetDiscussion(argInt(req.Params.Arguments, "discussionNumber"))
+	if err != nil {
+		return errResult(err), nil
+	}
+	if !ok {
+		return notFound("discussion"), nil
+	}
+	return t.rawResult(doc), nil
+}
+
+func (t *tools) getDiscussionComments(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	items, err := t.d.Query.DiscussionComments(argInt(req.Params.Arguments, "discussionNumber"))
+	if err != nil {
+		return errResult(err), nil
+	}
+	return t.rawArrayResult(items), nil
+}
+
+func (t *tools) getCommit(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	doc, ok, err := t.d.Git.Commit(argStr(req.Params.Arguments, "sha"))
+	if err != nil || !ok {
+		return notFound("commit"), nil
+	}
+	return textResult(doc), nil
+}
+
+func (t *tools) listBranches(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	items, err := t.d.Git.Branches()
+	if err != nil {
+		return errResult(err), nil
+	}
+	return textResult(items), nil
+}
+
+func (t *tools) listTags(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	items, err := t.d.Git.Tags()
+	if err != nil {
+		return errResult(err), nil
+	}
+	return textResult(items), nil
 }
 
 func (t *tools) searchIssues(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {

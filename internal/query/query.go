@@ -287,6 +287,26 @@ func (q *Query) GetDiscussion(number int64) (raw, bool, error) {
 	return q.scalarRaw("SELECT raw_json FROM discussions WHERE number = ?", number)
 }
 
+// DiscussionComments returns the top-level comment nodes of a discussion (the
+// stored discussion raw_json is already GraphQL-shaped).
+func (q *Query) DiscussionComments(number int64) ([]raw, error) {
+	doc, ok, err := q.GetDiscussion(number)
+	if err != nil || !ok {
+		return nil, err
+	}
+	var node map[string]any
+	if err := json.Unmarshal(doc, &node); err != nil {
+		return nil, err
+	}
+	comments, _ := node["comments"].(map[string]any)
+	nodes, _ := comments["nodes"].([]any)
+	out := make([]raw, 0, len(nodes))
+	for _, n := range nodes {
+		out = append(out, mustMarshal(n))
+	}
+	return out, nil
+}
+
 func (q *Query) ListProjects() ([]raw, error) {
 	return q.queryRaw("SELECT raw_json FROM projects ORDER BY number")
 }
