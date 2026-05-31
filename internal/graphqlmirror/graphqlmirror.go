@@ -131,44 +131,83 @@ func (e *exec) resolveRoot(f *ast.Field) (any, error) {
 		if owner != e.m.owner || name != e.m.repo {
 			return nil, errUnsupported
 		}
-		return e.resolveObject(f.SelectionSet, e.resolveRepository)
+		var repoMap map[string]any
+		if doc, ok, err := e.m.q.Repo(); err == nil && ok {
+			json.Unmarshal(doc, &repoMap)
+		}
+		return e.resolveObject(f.SelectionSet, e.repositoryResolver(repoMap))
 	default:
 		return nil, errUnsupported
 	}
 }
 
-func (e *exec) resolveRepository(f *ast.Field) (any, error) {
-	switch f.Name {
-	case "name":
-		return e.m.repo, nil
-	case "nameWithOwner":
-		return e.m.owner + "/" + e.m.repo, nil
-	case "owner", "login":
-		if f.Name == "owner" {
-			return e.resolveObject(f.SelectionSet, func(sf *ast.Field) (any, error) {
-				if sf.Name == "login" {
-					return e.m.owner, nil
+// repositoryResolver resolves repository fields, with scalar fields backed by
+// the stored REST repo payload (translated to GraphQL names).
+func (e *exec) repositoryResolver(repo map[string]any) func(*ast.Field) (any, error) {
+	return func(f *ast.Field) (any, error) {
+		switch f.Name {
+		case "name":
+			return e.m.repo, nil
+		case "nameWithOwner":
+			return e.m.owner + "/" + e.m.repo, nil
+		case "owner":
+			return e.resolveObject(f.SelectionSet, loginFieldFn(e.m.owner))
+		case "description":
+			return nullable(repo["description"]), nil
+		case "url", "resourcePath":
+			return nullable(repo["html_url"]), nil
+		case "homepageUrl":
+			return nullable(repo["homepage"]), nil
+		case "isPrivate":
+			return boolOf(repo["private"]), nil
+		case "isArchived":
+			return boolOf(repo["archived"]), nil
+		case "isFork":
+			return boolOf(repo["fork"]), nil
+		case "databaseId", "id":
+			return jsonNumber(repo["id"]), nil
+		case "createdAt":
+			return nullable(repo["created_at"]), nil
+		case "updatedAt":
+			return nullable(repo["updated_at"]), nil
+		case "pushedAt":
+			return nullable(repo["pushed_at"]), nil
+		case "stargazerCount":
+			return jsonNumber(repo["stargazers_count"]), nil
+		case "forkCount":
+			return jsonNumber(repo["forks_count"]), nil
+		case "defaultBranchRef":
+			branch := str(repo, "default_branch")
+			if branch == "" {
+				return nil, nil
+			}
+			return e.resolveObject(f.SelectionSet, func(rf *ast.Field) (any, error) {
+				if rf.Name == "name" {
+					return branch, nil
 				}
 				return nil, errUnsupported
 			})
+		case "issue":
+			return e.resolveSingleIssue(f, false)
+		case "pullRequest":
+			return e.resolveSingleIssue(f, true)
+		case "issueOrPullRequest":
+			return e.resolveSingleIssue(f, false)
+		case "discussion":
+			return e.resolveSingleDiscussion(f)
+		case "projectV2":
+			return e.resolveSingleProject(f)
+		case "issues":
+			return e.resolveIssueConnection(f, false)
+		case "pullRequests":
+			return e.resolveIssueConnection(f, true)
+		case "discussions":
+			return e.resolveDiscussionConnection(f)
+		case "projectsV2":
+			return e.resolveProjectConnection(f)
+		default:
+			return nil, errUnsupported
 		}
-		return e.m.owner, nil
-	case "issue":
-		return e.resolveSingleIssue(f, false)
-	case "pullRequest":
-		return e.resolveSingleIssue(f, true)
-	case "issueOrPullRequest":
-		return e.resolveSingleIssue(f, false)
-	case "discussion":
-		return e.resolveSingleDiscussion(f)
-	case "issues":
-		return e.resolveIssueConnection(f, false)
-	case "pullRequests":
-		return e.resolveIssueConnection(f, true)
-	case "discussions":
-		return e.resolveDiscussionConnection(f)
-	default:
-		return nil, errUnsupported
 	}
 }
 
@@ -267,6 +306,57 @@ func (e *exec) resolveSingleDiscussion(f *ast.Field) (any, error) {
 	return e.resolveObject(f.SelectionSet, e.genericResolver(node))
 }
 
+// --- projects v2 (stored already in GraphQL shape) ---
+
+func (e *exec) resolveSingleProject(f *ast.Field) (any, error) {
+	number := e.argInt(f, "number")
+	if number == 0 {
+		return nil, errUnsupported
+	}
+	doc, ok, err := e.m.q.GetProject(number)
+	if err != nil {
+		return nil, errUnsupported
+	}
+	if !ok {
+		return nil, nil
+	}
+	var node map[string]any
+	if err := json.Unmarshal(doc, &node); err != nil {
+		return nil, errUnsupported
+	}
+	return e.resolveObject(f.SelectionSet, e.genericResolver(node))
+}
+
+func (e *exec) resolveProjectConnection(f *ast.Field) (any, error) {
+	docs, err := e.m.q.ListProjects()
+	if err != nil {
+		return nil, errUnsupported
+	}
+	first := e.argInt(f, "first")
+	if first <= 0 {
+		first = 20
+	}
+	offset := decodeCursor(e.argStr(f, "after"))
+	total := len(docs)
+	start, end := clampRange(offset, int(first), total)
+	pageDocs := docs[start:end]
+	return e.resolveConnection(f, total, offset, len(pageDocs), func(nodeField *ast.Field) (any, error) {
+		var nodes []any
+		for _, d := range pageDocs {
+			var node map[string]any
+			if err := json.Unmarshal(d, &node); err != nil {
+				return nil, errUnsupported
+			}
+			r, err := e.resolveObject(nodeField.SelectionSet, e.genericResolver(node))
+			if err != nil {
+				return nil, err
+			}
+			nodes = append(nodes, r)
+		}
+		return nodes, nil
+	})
+}
+
 // genericResolver resolves fields by matching the GraphQL field name to the same
 // key in an already-GraphQL-shaped source map (discussions, projects). Nested
 // objects and connection-like {nodes} sub-structures are recursed into.
@@ -361,14 +451,7 @@ func (e *exec) resolveDiscussionConnection(f *ast.Field) (any, error) {
 	}
 	offset := decodeCursor(e.argStr(f, "after"))
 	total := len(docs)
-	end := offset + int(first)
-	if end > total {
-		end = total
-	}
-	start := offset
-	if start > total {
-		start = total
-	}
+	start, end := clampRange(offset, int(first), total)
 	pageDocs := docs[start:end]
 	return e.resolveConnection(f, total, offset, len(pageDocs), func(nodeField *ast.Field) (any, error) {
 		var nodes []any
@@ -385,6 +468,20 @@ func (e *exec) resolveDiscussionConnection(f *ast.Field) (any, error) {
 		}
 		return nodes, nil
 	})
+}
+
+// clampRange returns the [start,end) slice bounds for a page of size first at
+// the given offset into a total-length list.
+func clampRange(offset, first, total int) (start, end int) {
+	start = offset
+	if start > total {
+		start = total
+	}
+	end = start + first
+	if end > total {
+		end = total
+	}
+	return start, end
 }
 
 // resolveConnection assembles the standard {totalCount, nodes, edges, pageInfo}

@@ -29,7 +29,8 @@ type Proxy struct {
 	Token    string
 	Client   *http.Client
 	ReSync   ReSyncFunc
-	Disabled bool // --proxy=off: refuse to forward (offline-only mode)
+	Disabled bool   // --proxy=off: refuse to forward (offline-only mode)
+	BaseURL  string // upstream base; defaults to api.github.com (overridable in tests)
 }
 
 // New builds a Proxy.
@@ -39,6 +40,14 @@ func New(token string, resync ReSyncFunc) *Proxy {
 		Client: &http.Client{Timeout: 60 * time.Second},
 		ReSync: resync,
 	}
+}
+
+// base returns the upstream base URL (the GitHub API by default).
+func (p *Proxy) base() string {
+	if p.BaseURL != "" {
+		return p.BaseURL
+	}
+	return upstream
 }
 
 // hopHeaders are managed by the transport and must not be copied.
@@ -56,7 +65,7 @@ func (p *Proxy) Forward(w http.ResponseWriter, r *http.Request) int {
 		return http.StatusNotImplemented
 	}
 
-	target := upstream + r.URL.Path
+	target := p.base() + r.URL.Path
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
 	}
@@ -90,6 +99,21 @@ func (p *Proxy) Forward(w http.ResponseWriter, r *http.Request) int {
 		return 0
 	}
 	defer resp.Body.Close()
+	// Buffer the upstream body so the targeted re-sync can run BEFORE we return
+	// to the caller — read-after-write consistency means the local store is
+	// already updated by the time the write response is delivered.
+	respBody, _ := io.ReadAll(resp.Body)
+
+	resyncFailed := false
+	if r.Method != http.MethodGet && r.Method != http.MethodHead &&
+		resp.StatusCode >= 200 && resp.StatusCode < 300 && p.ReSync != nil {
+		if kind, number, ok := classifyWrite(r.Method, r.URL.Path); ok {
+			if err := p.ReSync(kind, number); err != nil {
+				log.Printf("write-proxy: re-sync %s #%d failed: %v", kind, number, err)
+				resyncFailed = true
+			}
+		}
+	}
 
 	for k, vs := range resp.Header {
 		if hopHeaders[http.CanonicalHeaderKey(k)] {
@@ -100,20 +124,14 @@ func (p *Proxy) Forward(w http.ResponseWriter, r *http.Request) int {
 		}
 	}
 	w.Header().Set("X-GitHub-Export-Proxied", "true")
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
-
-	// Read-after-write consistency: re-sync the touched entity on a successful
-	// write so a subsequent local read reflects it.
-	if r.Method != http.MethodGet && r.Method != http.MethodHead &&
-		resp.StatusCode >= 200 && resp.StatusCode < 300 && p.ReSync != nil {
-		if kind, number, ok := classifyWrite(r.Method, r.URL.Path); ok {
-			if err := p.ReSync(kind, number); err != nil {
-				log.Printf("write-proxy: re-sync %s #%d failed: %v", kind, number, err)
-				w.Header().Set("X-GitHub-Export-Resync", "failed")
-			}
-		}
+	if resyncFailed {
+		w.Header().Set("X-GitHub-Export-Resync", "failed")
 	}
+	// Content-Length from upstream may not match after buffering; let the writer
+	// recompute it.
+	w.Header().Del("Content-Length")
+	w.WriteHeader(resp.StatusCode)
+	w.Write(respBody)
 	return resp.StatusCode
 }
 
@@ -124,7 +142,7 @@ func (p *Proxy) Request(ctx context.Context, method, path string, body io.Reader
 	if p.Disabled {
 		return http.StatusNotImplemented, nil, fmt.Errorf("proxy disabled (--proxy=off)")
 	}
-	req, err := http.NewRequestWithContext(ctx, method, upstream+path, body)
+	req, err := http.NewRequestWithContext(ctx, method, p.base()+path, body)
 	if err != nil {
 		return 0, nil, err
 	}
