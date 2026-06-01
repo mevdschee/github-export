@@ -12,17 +12,27 @@ Blog post: https://www.tqdev.com/2026-github-export-open-source-maintenance-ai/
 ## Usage
 
 ```bash
+# Authentication: log in with the GitHub CLI once...
+gh auth login          # token is then picked up automatically
+# ...or set the token yourself
 export GITHUB_TOKEN=$(gh auth token)
+
 ./github-export [flags] [owner/repo] [output-dir]
 ```
+
+The token is resolved from `GITHUB_TOKEN` if set, otherwise from the GitHub CLI
+(`gh auth token`) automatically — so once you have run `gh auth login` you can
+skip the `export` step. If neither is available the error tells you exactly what
+to do (install `gh`, log in, or set the variable).
 
 The output directory defaults to `github-data/`. On the first run, all data is
 fetched. On subsequent runs, only issues and PRs updated since the last sync are
 re-fetched.
 
 Run with no arguments to sync the export in the current directory — owner/repo
-are read from `./repo.yml`, so this is the easiest way to update an existing
-export:
+are read from `./repo.yml`, or detected from the `origin` git remote when run
+inside a checked-out GitHub repo, so this is the easiest way to update an
+existing export:
 
 ```bash
 cd path/to/github-data && github-export

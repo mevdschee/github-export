@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -26,23 +27,22 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Exports GitHub issues, PRs, releases, labels, and milestones\n")
 		fmt.Fprintf(os.Stderr, "to a local directory in markdown format.\n\n")
 		fmt.Fprintf(os.Stderr, "Runs incrementally on subsequent invocations.\n\n")
-		fmt.Fprintf(os.Stderr, "If invoked with no arguments, the current directory is treated\n")
-		fmt.Fprintf(os.Stderr, "as an existing export and owner/repo are read from ./repo.yml.\n\n")
-		fmt.Fprintf(os.Stderr, "Requires GITHUB_TOKEN environment variable.\n")
-		fmt.Fprintf(os.Stderr, "  export GITHUB_TOKEN=$(gh auth token)\n\n")
+		fmt.Fprintf(os.Stderr, "If invoked with no arguments, owner/repo are read from ./repo.yml in the\n")
+		fmt.Fprintf(os.Stderr, "current directory, or detected from its origin git remote.\n\n")
+		fmt.Fprintf(os.Stderr, "Needs a GitHub token: set GITHUB_TOKEN, or just log in with the GitHub CLI\n('gh auth login') and it is picked up automatically.\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
 	args := flag.Args()
 
-	token := os.Getenv("GITHUB_TOKEN")
+	token, note := resolveToken()
 	if token == "" {
-		fmt.Fprintln(os.Stderr, "GITHUB_TOKEN environment variable is required. Run:")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  export GITHUB_TOKEN=$(gh auth token)")
-		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, note)
 		os.Exit(1)
+	}
+	if note != "" {
+		log.Println(note)
 	}
 
 	var owner, repo, outDir string
@@ -98,8 +98,14 @@ func main() {
 		repo = cfg.Repo
 	}
 	if owner == "" || repo == "" {
+		if o, r, ok := detectRepoFromGit(); ok {
+			owner, repo = o, r
+			log.Printf("Detected %s/%s from git remote", owner, repo)
+		}
+	}
+	if owner == "" || repo == "" {
 		if len(args) == 0 {
-			log.Fatalf("no owner/repo given and no repo.yml found in %s; pass owner/repo (e.g., octocat/Hello-World) or run from a directory that already has an export", outDir)
+			log.Fatalf("no owner/repo given, no repo.yml in %s, and no GitHub origin remote; pass owner/repo (e.g., octocat/Hello-World) or run from a directory that already has an export or a GitHub checkout", outDir)
 		}
 		log.Fatal("owner/repo must be specified as first argument (e.g., octocat/Hello-World)")
 	}
@@ -165,6 +171,22 @@ func main() {
 			log.Printf("Warning: exporting events: %v", err)
 		}
 	}
+}
+
+var gitRemoteRe = regexp.MustCompile(`github\.com[:/]([^/]+)/(.+?)(?:\.git)?$`)
+
+// detectRepoFromGit parses owner/repo out of the origin remote URL, so the tool
+// can be run with no arguments inside a checked-out GitHub repository.
+func detectRepoFromGit() (owner, repo string, ok bool) {
+	out, err := exec.Command("git", "remote", "get-url", "origin").Output()
+	if err != nil {
+		return "", "", false
+	}
+	m := gitRemoteRe.FindStringSubmatch(strings.TrimSpace(string(out)))
+	if m == nil {
+		return "", "", false
+	}
+	return m[1], m[2], true
 }
 
 var maxAgeRe = regexp.MustCompile(`^(\d+)(h|d|w|mo|y)$`)
