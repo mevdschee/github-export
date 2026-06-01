@@ -131,6 +131,8 @@ func main() {
 	syncStart := time.Now().UTC().Format(time.RFC3339)
 	client := github.NewClient(token)
 
+	skip := sync.CheckScopes(client)
+
 	// Sync all entities
 	if err := sync.Labels(client, owner, repo, outDir); err != nil {
 		log.Printf("Warning: %v", err)
@@ -138,9 +140,15 @@ func main() {
 	if err := sync.Milestones(client, owner, repo, outDir); err != nil {
 		log.Printf("Warning: %v", err)
 	}
-	issueProjects, projectEvents, err := sync.Projects(client, owner, repo, outDir, since)
-	if err != nil {
-		log.Printf("Warning: %v", err)
+	var issueProjects map[int64][]string
+	var projectEvents []hooks.Event
+	if !skip["projects"] {
+		ip, pe, err := sync.Projects(client, owner, repo, outDir, since)
+		if err != nil {
+			log.Printf("Warning: %v", err)
+		}
+		issueProjects = ip
+		projectEvents = pe
 	}
 	events, err := sync.Issues(client, owner, repo, outDir, since, issueProjects)
 	if err != nil {
