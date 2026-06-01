@@ -21,6 +21,10 @@ const (
 type Client struct {
 	token  string
 	client *http.Client
+
+	scopes        []string
+	scopesKnown   bool
+	scopesFetched bool
 }
 
 func NewClient(token string) *Client {
@@ -28,6 +32,44 @@ func NewClient(token string) *Client {
 		token:  token,
 		client: &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+// Scopes returns the OAuth scopes granted to the token, as reported by the
+// X-OAuth-Scopes header on an authenticated request. The boolean is false when
+// the token does not report scopes — fine-grained PATs and GitHub App
+// installation tokens omit the header — in which case the caller must not
+// infer that any scope is missing. The result is fetched once and cached.
+func (c *Client) Scopes() ([]string, bool) {
+	if c.scopesFetched {
+		return c.scopes, c.scopesKnown
+	}
+	c.scopesFetched = true
+
+	req, err := http.NewRequest("GET", API+"/", nil)
+	if err != nil {
+		return nil, false
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+
+	header, ok := resp.Header["X-Oauth-Scopes"]
+	if !ok {
+		return nil, false
+	}
+	c.scopesKnown = true
+	for _, part := range strings.Split(strings.Join(header, ","), ",") {
+		if s := strings.TrimSpace(part); s != "" {
+			c.scopes = append(c.scopes, s)
+		}
+	}
+	return c.scopes, true
 }
 
 var linkNextRe = regexp.MustCompile(`<([^>]+)>;\s*rel="next"`)

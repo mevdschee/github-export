@@ -18,22 +18,28 @@ import (
 func Run(c *github.Client, s *store.Store, owner, repo, since, syncStart string) ([]hooks.Event, error) {
 	var events []hooks.Event
 
+	skip := checkScopes(c)
+
 	if err := Labels(c, s, owner, repo); err != nil {
 		log.Printf("Warning: %v", err)
 	}
 	if err := Milestones(c, s, owner, repo); err != nil {
 		log.Printf("Warning: %v", err)
 	}
-	issueProjects, projectEvents, err := Projects(c, s, owner, repo, since)
-	if err != nil {
-		log.Printf("Warning: %v", err)
+	var issueProjects map[int64][]string
+	if !skip["projects"] {
+		ip, projectEvents, err := Projects(c, s, owner, repo, since)
+		if err != nil {
+			log.Printf("Warning: %v", err)
+		}
+		issueProjects = ip
+		events = append(events, projectEvents...)
 	}
 	issueEvents, err := Issues(c, s, owner, repo, since, issueProjects)
 	if err != nil {
 		log.Printf("Warning: %v", err)
 	}
 	events = append(events, issueEvents...)
-	events = append(events, projectEvents...)
 
 	releaseEvents, err := Releases(c, s, owner, repo)
 	if err != nil {
