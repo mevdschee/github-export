@@ -253,12 +253,12 @@ Requires Go 1.22+.
 
 Maintainers cut a release with `release.sh`, which derives the next version from
 the latest `vMAJOR.MINOR.PATCH` tag, tags the commit, and publishes a GitHub
-release with auto-generated notes:
+release titled with the message you pass:
 
 ```bash
-./release.sh build   # v0.9.4 -> v0.9.5  (patch)
-./release.sh minor   # v0.9.4 -> v0.10.0
-./release.sh major   # v0.9.4 -> v1.0.0
+./release.sh build "Fix output dir bug"   # v0.9.4 -> v0.9.5  (patch)
+./release.sh minor "Add version flag"     # v0.9.4 -> v0.10.0
+./release.sh major "Stable API"           # v0.9.4 -> v1.0.0
 ```
 
 It refuses to run on a dirty tree or off the default branch, and builds and
