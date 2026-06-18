@@ -43,6 +43,7 @@ cd path/to/github-data && github-export
 | Flag        | Example                                   | What it does                                                                                                                               |
 | ----------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `--max-age` | `--max-age=2y`, `6mo`, `4w`, `30d`, `12h` | Only fetch issues/PRs/projects updated within this window. Useful for the first sync of very large repos (cli/cli, kubernetes/kubernetes). |
+| `--version` | `--version`                               | Print the version and exit. Installed via `go install ...@vX.Y.Z` it reports that tag; a plain local build reports the commit.             |
 
 `--max-age` is a floor on the effective `since`: on later runs the more-recent
 `synced_at` from `repo.yml` takes over automatically, so you can leave the flag
@@ -238,7 +239,31 @@ go build .
 sudo install -m 755 github-export /usr/local/bin/
 ```
 
+Or install a tagged release straight from source, which bakes the version into
+the binary:
+
+```bash
+go install github.com/mevdschee/github-export@latest
+github-export --version
+```
+
 Requires Go 1.22+.
+
+## Releasing
+
+Maintainers cut a release with `release.sh`, which derives the next version from
+the latest `vMAJOR.MINOR.PATCH` tag, tags the commit, and publishes a GitHub
+release with auto-generated notes:
+
+```bash
+./release.sh build   # v0.9.4 -> v0.9.5  (patch)
+./release.sh minor   # v0.9.4 -> v0.10.0
+./release.sh major   # v0.9.4 -> v1.0.0
+```
+
+It refuses to run on a dirty tree or off the default branch, and builds and
+tests first. No binaries are attached; users install with `go install`, which
+records the tag as the version.
 
 ## Requirements
 

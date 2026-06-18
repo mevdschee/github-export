@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 func main() {
 	maxAge := flag.String("max-age", "",
 		"only fetch issues/PRs/projects updated within this window (e.g. 2y, 6mo, 4w, 30d, 12h); useful for very large repos on first sync")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] [owner/repo] [output-dir]\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Exports GitHub issues, PRs, releases, labels, and milestones\n")
@@ -36,6 +38,11 @@ func main() {
 	flag.Parse()
 	args := flag.Args()
 
+	if *showVersion {
+		fmt.Println(resolveVersion())
+		return
+	}
+
 	token, note := resolveToken()
 	if token == "" {
 		fmt.Fprintln(os.Stderr, note)
@@ -48,16 +55,9 @@ func main() {
 	var owner, repo, outDir string
 	switch {
 	case len(args) == 0:
-		// Deduce mode: current directory must already hold a repo.yml from
-		// a previous sync. owner/repo are filled in from cfg below. If the
-		// current directory has no repo.yml but a ./github-data folder does,
-		// treat that as the existing export.
-		outDir = "."
-		if _, err := os.Stat(filepath.Join(outDir, "repo.yml")); os.IsNotExist(err) {
-			if _, err := os.Stat(filepath.Join("github-data", "repo.yml")); err == nil {
-				outDir = "github-data"
-			}
-		}
+		// Deduce mode. owner/repo are filled in from cfg below (./repo.yml) or
+		// the origin git remote.
+		outDir = deduceOutDir()
 	case len(args) == 1:
 		if strings.Contains(args[0], "/") {
 			parts := strings.SplitN(args[0], "/", 2)
@@ -179,6 +179,58 @@ func main() {
 			log.Printf("Warning: exporting events: %v", err)
 		}
 	}
+}
+
+// version is set at release time via -ldflags "-X main.version=vX.Y.Z". When
+// empty (a plain `go build`/`go install`), resolveVersion falls back to the
+// module version or VCS revision recorded in the build info.
+var version string
+
+// resolveVersion reports the build's version string. A release binary has it
+// baked in; for `go install owner/repo@vX.Y.Z` it comes from the module
+// version; for a local build it falls back to the commit revision.
+func resolveVersion() string {
+	if version != "" {
+		return version
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "dev"
+	}
+	if v := info.Main.Version; v != "" && v != "(devel)" {
+		return v
+	}
+	var rev, dirty string
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			if s.Value == "true" {
+				dirty = "-dirty"
+			}
+		}
+	}
+	if rev != "" {
+		if len(rev) > 12 {
+			rev = rev[:12]
+		}
+		return "dev-" + rev + dirty
+	}
+	return "dev"
+}
+
+// deduceOutDir picks the output directory for a no-argument run. The current
+// directory is used in place only when it is itself an export (already holds a
+// repo.yml), which is the `cd path/to/github-data && github-export` update
+// flow. Otherwise the export goes into a github-data/ subfolder — an existing
+// one if present, or a fresh one when run inside a checked-out GitHub repo — so
+// the checkout root is never polluted with issues/, releases/, repo.yml, etc.
+func deduceOutDir() string {
+	if _, err := os.Stat("repo.yml"); err == nil {
+		return "."
+	}
+	return "github-data"
 }
 
 var gitRemoteRe = regexp.MustCompile(`github\.com[:/]([^/]+)/(.+?)(?:\.git)?$`)
