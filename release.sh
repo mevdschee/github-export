@@ -89,6 +89,6 @@ echo "Releasing ${latest} -> ${next}: ${title}"
 git tag -a "$next" -m "$title"
 git push origin "$next"
 
-gh release create "$next" --title "$title"
+gh release create "$next" --title "$title" --notes ""
 
 echo "Released ${next}: $(gh release view "$next" --json url --jq .url)"
