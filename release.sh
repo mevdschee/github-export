@@ -2,13 +2,13 @@
 #
 # Cut a new release: bump the version, tag it, and publish a GitHub release.
 #
-#   ./release.sh build   # v0.9.4 -> v0.9.5   (patch)
-#   ./release.sh minor   # v0.9.4 -> v0.10.0
-#   ./release.sh major   # v0.9.4 -> v1.0.0
+#   ./release.sh build "Fix output dir bug"   # v0.9.4 -> v0.9.5   (patch)
+#   ./release.sh minor "Add version flag"      # v0.9.4 -> v0.10.0
+#   ./release.sh major "Stable API"            # v0.9.4 -> v1.0.0
 #
 # The next version is derived from the latest vMAJOR.MINOR.PATCH git tag
-# (TEST-prefixed fixture tags are ignored). Release notes are generated from the
-# commits since the previous tag. No binaries are attached; users install with
+# (TEST-prefixed fixture tags are ignored) and the release is titled with the
+# <title> argument. No binaries are attached; users install with
 # `go install github.com/mevdschee/github-export@<tag>`, which bakes the version
 # into the build so `github-export -version` reports it.
 #
@@ -23,10 +23,17 @@ level="${1:-}"
 case "$level" in
 	major | minor | build) ;;
 	*)
-		echo "usage: $0 {major|minor|build}" >&2
+		echo "usage: $0 {major|minor|build} <title>" >&2
 		exit 1
 		;;
 esac
+
+shift
+title="$*"
+if [ -z "$title" ]; then
+	echo "usage: $0 {major|minor|build} <title>" >&2
+	exit 1
+fi
 
 # Refuse to release a dirty tree: the tag must point at committed code.
 if [ -n "$(git status --porcelain)" ]; then
@@ -77,11 +84,11 @@ case "$level" in
 esac
 next="v${major}.${minor}.${patch}"
 
-echo "Releasing ${latest} -> ${next}"
+echo "Releasing ${latest} -> ${next}: ${title}"
 
-git tag -a "$next" -m "$next"
+git tag -a "$next" -m "$title"
 git push origin "$next"
 
-gh release create "$next" --title "$next" --generate-notes
+gh release create "$next" --title "$title"
 
 echo "Released ${next}: $(gh release view "$next" --json url --jq .url)"
